@@ -83,6 +83,7 @@ interface AppStateResponse {
 
 interface UserModalFormState {
   accountId?: string;
+  authType: "oauth2" | "cookie";
   name: string;
   username: string;
   twitterUserId: string;
@@ -91,13 +92,14 @@ interface UserModalFormState {
   accountStatus: UserAccountStatus;
   accessToken: string;
   refreshToken: string;
+  ct0: string;
   cronEnabled: boolean;
   isActive: boolean;
-  isSimulated: boolean;
   verifyOnline: boolean;
 }
 
 const INITIAL_USER_FORM: UserModalFormState = {
+  authType: "cookie",
   name: "",
   username: "",
   twitterUserId: "",
@@ -106,10 +108,10 @@ const INITIAL_USER_FORM: UserModalFormState = {
   accountStatus: "active",
   accessToken: "",
   refreshToken: "",
+  ct0: "",
   cronEnabled: true,
   isActive: false,
-  isSimulated: false,
-  verifyOnline: false,
+  verifyOnline: true,
 };
 
 export default function AdminifyUsersAndTokensPage() {
@@ -313,12 +315,7 @@ export default function AdminifyUsersAndTokensPage() {
   // Open Modal for Create or Edit
   const openCreateUserModal = () => {
     setModalMode("create");
-    setUserForm({
-      ...INITIAL_USER_FORM,
-      accessToken: `x_oauth2_at_${Math.random().toString(36).slice(2, 14)}${Math.random().toString(36).slice(2, 14)}`,
-      refreshToken: `x_oauth2_rt_${Math.random().toString(36).slice(2, 14)}${Math.random().toString(36).slice(2, 14)}`,
-      isSimulated: true,
-    });
+    setUserForm(INITIAL_USER_FORM);
     setIsModalOpen(true);
   };
 
@@ -326,17 +323,18 @@ export default function AdminifyUsersAndTokensPage() {
     setModalMode("edit");
     setUserForm({
       accountId: acc.id,
+      authType: acc.authType || "oauth2",
       name: acc.name,
       username: acc.username,
       twitterUserId: acc.twitterUserId,
-      email: acc.email || `${acc.username}@x-user.io`,
+      email: acc.email || `${acc.username}@x.com`,
       role: acc.role || "member",
       accountStatus: acc.accountStatus || "active",
       accessToken: acc.accessToken,
       refreshToken: acc.refreshToken || "",
+      ct0: acc.ct0 || "",
       cronEnabled: acc.cronEnabled ?? true,
       isActive: acc.isActive,
-      isSimulated: Boolean(acc.isSimulated),
       verifyOnline: false,
     });
     setIsModalOpen(true);
@@ -347,19 +345,30 @@ export default function AdminifyUsersAndTokensPage() {
     setSavingUser(true);
     try {
       if (modalMode === "create") {
+        const payload =
+          userForm.authType === "cookie"
+            ? {
+                action: "import_cookie",
+                authToken: userForm.accessToken,
+                ct0: userForm.ct0,
+                email: userForm.email,
+                role: userForm.role,
+              }
+            : {
+                action: "import_token",
+                ...userForm,
+              };
+
         const res = await fetch("/api/auth/twitter/token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "import_token",
-            ...userForm,
-          }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Không thể thêm User");
         notify(
           "success",
-          `Đã thêm User @${data.account.username} và lưu OAuth2 Token thành công!`
+          `Đã xác thực thật và thêm User @${data.account.username} vào Vercel Redis!`
         );
       } else {
         const res = await fetch("/api/auth/twitter/token", {
@@ -974,10 +983,10 @@ export default function AdminifyUsersAndTokensPage() {
                     Recent User Tokens
                   </h3>
                   <button
-                    onClick={handleQuickGenerateSandboxUser}
+                    onClick={openCreateUserModal}
                     className="text-xs font-semibold text-[#ef1c1c] hover:underline cursor-pointer"
                   >
-                    + Quick Demo Token
+                    + Thêm Token Thật
                   </button>
                 </div>
 
@@ -1876,141 +1885,147 @@ export default function AdminifyUsersAndTokensPage() {
             </div>
 
             <form onSubmit={handleSaveUserModal} className="space-y-3 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Họ tên hiển thị (Name)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={userForm.name}
-                    onChange={(e) =>
-                      setUserForm((p) => ({ ...p, name: e.target.value }))
-                    }
-                    placeholder="VD: Wilbert Williams"
-                    className="w-full rounded-md border border-slate-300 px-3 py-2"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Username X (@handle)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={userForm.username}
-                    onChange={(e) =>
-                      setUserForm((p) => ({ ...p, username: e.target.value }))
-                    }
-                    placeholder="VD: wilbert_williams"
-                    className="w-full rounded-md border border-slate-300 px-3 py-2"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Twitter User ID
-                  </label>
-                  <input
-                    type="text"
-                    value={userForm.twitterUserId}
-                    onChange={(e) =>
-                      setUserForm((p) => ({
-                        ...p,
-                        twitterUserId: e.target.value,
-                      }))
-                    }
-                    placeholder="VD: 1589203411"
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Email quản lý
-                  </label>
-                  <input
-                    type="email"
-                    value={userForm.email}
-                    onChange={(e) =>
-                      setUserForm((p) => ({ ...p, email: e.target.value }))
-                    }
-                    placeholder="user@domain.com"
-                    className="w-full rounded-md border border-slate-300 px-3 py-2"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Phân quyền (Role)
-                  </label>
-                  <select
-                    value={userForm.role}
-                    onChange={(e) =>
-                      setUserForm((p) => ({
-                        ...p,
-                        role: e.target.value as UserRole,
-                      }))
-                    }
-                    className="w-full rounded-md border border-slate-300 px-3 py-2"
-                  >
-                    <option value="member">Member</option>
-                    <option value="vip">VIP</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Trạng thái Token
-                  </label>
-                  <select
-                    value={userForm.accountStatus}
-                    onChange={(e) =>
-                      setUserForm((p) => ({
-                        ...p,
-                        accountStatus: e.target.value as UserAccountStatus,
-                      }))
-                    }
-                    className="w-full rounded-md border border-slate-300 px-3 py-2"
-                  >
-                    <option value="active">Active (Hoạt động)</option>
-                    <option value="expired">Expired (Hết hạn)</option>
-                    <option value="suspended">Suspended (Tạm khóa)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  OAuth 2.0 Access Token <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={userForm.accessToken}
-                  onChange={(e) =>
-                    setUserForm((p) => ({ ...p, accessToken: e.target.value }))
+              <div className="flex gap-2 rounded-lg bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setUserForm((p) => ({ ...p, authType: "cookie" }))
                   }
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono"
-                />
+                  className={`flex-1 rounded-md py-1.5 font-semibold cursor-pointer ${
+                    userForm.authType === "cookie"
+                      ? "bg-[#ef1c1c] text-white"
+                      : "text-slate-600"
+                  }`}
+                >
+                  Cookie X (auth_token + ct0)
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setUserForm((p) => ({ ...p, authType: "oauth2" }))
+                  }
+                  className={`flex-1 rounded-md py-1.5 font-semibold cursor-pointer ${
+                    userForm.authType === "oauth2"
+                      ? "bg-[#ef1c1c] text-white"
+                      : "text-slate-600"
+                  }`}
+                >
+                  OAuth 2.0 Access Token
+                </button>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  OAuth 2.0 Refresh Token (Dùng để tự động gia hạn khi chạy Cron)
-                </label>
-                <input
-                  type="text"
-                  value={userForm.refreshToken}
-                  onChange={(e) =>
-                    setUserForm((p) => ({ ...p, refreshToken: e.target.value }))
-                  }
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono"
-                />
-              </div>
+              {userForm.authType === "cookie" ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Cookie <code>auth_token</code>{" "}
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={userForm.accessToken}
+                      onChange={(e) =>
+                        setUserForm((p) => ({
+                          ...p,
+                          accessToken: e.target.value,
+                        }))
+                      }
+                      placeholder="Dán auth_token từ trình duyệt đang đăng nhập X.com..."
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Cookie <code>ct0</code> (CSRF Token){" "}
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={userForm.ct0}
+                      onChange={(e) =>
+                        setUserForm((p) => ({ ...p, ct0: e.target.value }))
+                      }
+                      placeholder="Dán ct0 từ trình duyệt..."
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Họ tên hiển thị (Tùy chọn khi verify online)
+                      </label>
+                      <input
+                        type="text"
+                        value={userForm.name}
+                        onChange={(e) =>
+                          setUserForm((p) => ({ ...p, name: e.target.value }))
+                        }
+                        placeholder="Tự động lấy qua /2/users/me"
+                        className="w-full rounded-md border border-slate-300 px-3 py-2"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Username X (Tùy chọn khi verify online)
+                      </label>
+                      <input
+                        type="text"
+                        value={userForm.username}
+                        onChange={(e) =>
+                          setUserForm((p) => ({
+                            ...p,
+                            username: e.target.value,
+                          }))
+                        }
+                        placeholder="Tự động lấy qua /2/users/me"
+                        className="w-full rounded-md border border-slate-300 px-3 py-2"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      OAuth 2.0 Access Token{" "}
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={userForm.accessToken}
+                      onChange={(e) =>
+                        setUserForm((p) => ({
+                          ...p,
+                          accessToken: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      OAuth 2.0 Refresh Token
+                    </label>
+                    <input
+                      type="text"
+                      value={userForm.refreshToken}
+                      onChange={(e) =>
+                        setUserForm((p) => ({
+                          ...p,
+                          refreshToken: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 font-mono"
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="flex flex-wrap items-center gap-4 pt-1">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -2025,20 +2040,6 @@ export default function AdminifyUsersAndTokensPage() {
                     }
                   />
                   <span>Cho phép chạy Cron Auto-Follow</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={userForm.isSimulated}
-                    onChange={(e) =>
-                      setUserForm((p) => ({
-                        ...p,
-                        isSimulated: e.target.checked,
-                      }))
-                    }
-                  />
-                  <span>Tài khoản Sandbox / Giả lập</span>
                 </label>
               </div>
 

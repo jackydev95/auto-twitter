@@ -1,100 +1,169 @@
 "use client";
 
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
+  AlertCircle,
   CheckCircle2,
+  Copy,
   ExternalLink,
   KeyRound,
+  Loader2,
   Lock,
   ShieldCheck,
-  Sparkles,
-  UserCheck,
 } from "lucide-react";
 
-function XAuthorizeContent() {
+type AuthMethodTab = "oauth2_pkce" | "cookie_session" | "bearer_token";
+
+function XRealAuthGatewayContent() {
   const searchParams = useSearchParams();
-  const state = searchParams.get("state") || "pkce_state";
-  const scopeStr =
-    searchParams.get("scope") ||
-    "tweet.read users.read follows.read follows.write offline.access";
   const returnTo = searchParams.get("return_to") || "/";
-  const codeChallenge = searchParams.get("code_challenge") || "";
+  const urlError = searchParams.get("error");
 
-  const [username, setUsername] = useState("huanchain_x");
-  const [displayName, setDisplayName] = useState("Huan Chain");
-  const [email, setEmail] = useState("huanchain@x.com");
-  const [customAccessToken, setCustomAccessToken] = useState("");
-  const [customRefreshToken, setCustomRefreshToken] = useState("");
-  const [showAdvancedToken, setShowAdvancedToken] = useState(false);
+  const [tab, setTab] = useState<AuthMethodTab>("oauth2_pkce");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [callbackUri, setCallbackUri] = useState(
+    "https://auto-twitter.vercel.app/api/auth/twitter/callback"
+  );
 
-  // Option to redirect to real x.com with Client ID
-  const [showRealClientIdBox, setShowRealClientIdBox] = useState(false);
-  const [realClientId, setRealClientId] = useState("");
+  // Cookie session state
+  const [authToken, setAuthToken] = useState("");
+  const [ct0, setCt0] = useState("");
+
+  // Bearer token state
+  const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+
   const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(urlError);
+  const [copied, setCopied] = useState(false);
 
-  const scopes = scopeStr.split(" ").filter(Boolean);
-
-  const handleAuthorizeApp = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    const cleanHandle =
-      username.trim().replace(/^@+/, "") || "x_connected_user";
-    const authCode = `x_auth_code_${Date.now().toString(36)}`;
-
-    const callbackUrl = new URL(
-      "/api/auth/twitter/callback",
-      window.location.origin
-    );
-    callbackUrl.searchParams.set("code", authCode);
-    callbackUrl.searchParams.set("state", state);
-    callbackUrl.searchParams.set("username", cleanHandle);
-    callbackUrl.searchParams.set("name", displayName.trim() || `@${cleanHandle}`);
-    callbackUrl.searchParams.set("email", email.trim() || `${cleanHandle}@x.com`);
-    callbackUrl.searchParams.set("return_to", returnTo);
-    if (customAccessToken.trim()) {
-      callbackUrl.searchParams.set("access_token", customAccessToken.trim());
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setCallbackUri(`${window.location.origin}/api/auth/twitter/callback`);
     }
-    if (customRefreshToken.trim()) {
-      callbackUrl.searchParams.set("refresh_token", customRefreshToken.trim());
-    }
+    fetch("/api/state", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.oauthConfig?.clientId) {
+          setClientId(data.oauthConfig.clientId);
+        }
+        if (data?.oauthConfig?.clientSecret) {
+          setClientSecret(data.oauthConfig.clientSecret);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
-    window.location.href = callbackUrl.toString();
+  const handleCopyCallback = async () => {
+    await navigator.clipboard.writeText(callbackUri);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleRedirectToOfficialX = async () => {
-    if (!realClientId.trim()) return;
+  // 1. Official X.com OAuth 2.0 PKCE Redirect
+  const handleStartOfficialOAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    if (!clientId.trim()) {
+      setErrorMsg(
+        "Vui lòng nhập X OAuth 2.0 Client ID từ developer.x.com hoặc chuyển sang tab 'Kết nối bằng Cookie X (auth_token + ct0)'."
+      );
+      return;
+    }
+
     setSubmitting(true);
-    const redirectUri = `${window.location.origin}/api/auth/twitter/callback`;
+    try {
+      const res = await fetch("/api/auth/twitter/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: clientId.trim(),
+          clientSecret: clientSecret.trim(),
+          redirectUri: callbackUri,
+          returnTo,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.authorizationUrl) {
+        throw new Error(data.error || "Không thể khởi tạo phiên OAuth 2.0 PKCE");
+      }
+      window.location.href = data.authorizationUrl;
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Lỗi khởi tạo OAuth 2.0"
+      );
+      setSubmitting(false);
+    }
+  };
 
-    await fetch("/api/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "update_oauth_config",
-        clientId: realClientId.trim(),
-        redirectUri,
-      }),
-    });
+  // 2. Real X Cookie Session (auth_token + ct0)
+  const handleConnectCookie = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/auth/twitter/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "import_cookie",
+          authToken: authToken.trim(),
+          ct0: ct0.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Xác thực Cookie X thất bại");
+      }
+      const redirectUrl = new URL(returnTo, window.location.origin);
+      redirectUrl.searchParams.set("auth_success", data.account.username);
+      window.location.href = redirectUrl.toString();
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Không thể xác thực Cookie X"
+      );
+      setSubmitting(false);
+    }
+  };
 
-    const params = new URLSearchParams({
-      response_type: "code",
-      client_id: realClientId.trim(),
-      redirect_uri: redirectUri,
-      scope: scopes.join(" "),
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-    });
-
-    window.location.href = `https://x.com/i/oauth2/authorize?${params.toString()}`;
+  // 3. Real OAuth 2.0 Access Token
+  const handleConnectBearerToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/auth/twitter/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "import_token",
+          accessToken: accessToken.trim(),
+          refreshToken: refreshToken.trim(),
+          verifyOnline: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Xác thực Access Token thất bại");
+      }
+      const redirectUrl = new URL(returnTo, window.location.origin);
+      redirectUrl.searchParams.set("auth_success", data.account.username);
+      window.location.href = redirectUrl.toString();
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Không thể xác thực Access Token"
+      );
+      setSubmitting(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col justify-center items-center p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 sm:p-8 shadow-2xl space-y-6">
-        {/* Top X Header */}
+      <div className="w-full max-w-xl rounded-2xl border border-zinc-800 bg-zinc-950 p-6 sm:p-8 shadow-2xl space-y-6">
+        {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-black font-black text-2xl">
@@ -102,221 +171,262 @@ function XAuthorizeContent() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-white">
-                Ủy quyền kết nối tài khoản 𝕏
+                Xác thực & Kết nối tài khoản 𝕏 Thật
               </h1>
               <p className="text-xs text-zinc-400">
-                OAuth 2.0 PKCE Authorization Portal
+                100% Real X API v2 OAuth 2.0 PKCE & X Session Cookie Auth
               </p>
             </div>
           </div>
 
-          <span className="rounded-full bg-sky-500/15 border border-sky-500/30 px-2.5 py-1 text-[11px] font-semibold text-sky-400">
-            PKCE S256
-          </span>
+          <Link
+            href={returnTo}
+            className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+          >
+            Quay lại
+          </Link>
         </div>
 
-        {/* App Request Info */}
-        <div className="rounded-xl border border-zinc-800/90 bg-zinc-900/60 p-4 space-y-2">
-          <p className="text-sm font-semibold text-zinc-100">
-            <span className="text-sky-400">X Auto-Follow Studio</span> muốn kết
-            nối với tài khoản 𝕏 của bạn để lấy OAuth 2.0 Token cho Cron Jobs.
-          </p>
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {scopes.map((scope) => (
-              <span
-                key={scope}
-                className="rounded-md bg-zinc-800 px-2 py-0.5 font-mono text-[11px] text-sky-300"
-              >
-                {scope}
-              </span>
-            ))}
+        {/* Method Selector Tabs */}
+        <div className="grid grid-cols-3 gap-2 rounded-xl bg-zinc-900 p-1 text-xs">
+          <button
+            type="button"
+            onClick={() => {
+              setTab("oauth2_pkce");
+              setErrorMsg(null);
+            }}
+            className={`rounded-lg py-2 px-2 font-semibold transition cursor-pointer ${
+              tab === "oauth2_pkce"
+                ? "bg-white text-black shadow-xs"
+                : "text-zinc-400 hover:text-white"
+            }`}
+          >
+            1. OAuth 2.0 PKCE (X.com)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setTab("cookie_session");
+              setErrorMsg(null);
+            }}
+            className={`rounded-lg py-2 px-2 font-semibold transition cursor-pointer ${
+              tab === "cookie_session"
+                ? "bg-white text-black shadow-xs"
+                : "text-zinc-400 hover:text-white"
+            }`}
+          >
+            2. Cookie X (auth_token + ct0)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setTab("bearer_token");
+              setErrorMsg(null);
+            }}
+            className={`rounded-lg py-2 px-2 font-semibold transition cursor-pointer ${
+              tab === "bearer_token"
+                ? "bg-white text-black shadow-xs"
+                : "text-zinc-400 hover:text-white"
+            }`}
+          >
+            3. Dán Access Token
+          </button>
+        </div>
+
+        {errorMsg && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200">
+            <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+            <span>{errorMsg}</span>
           </div>
-        </div>
+        )}
 
-        {/* Account Form */}
-        <form onSubmit={handleAuthorizeApp} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* TAB 1: OFFICIAL X OAUTH 2.0 PKCE */}
+        {tab === "oauth2_pkce" && (
+          <form onSubmit={handleStartOfficialOAuth} className="space-y-4">
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3.5 text-xs text-zinc-300 space-y-2">
+              <p className="font-semibold text-white">
+                Chuyển hướng trực tiếp sang <code>https://x.com/i/oauth2/authorize</code>
+              </p>
+              <p className="text-zinc-400">
+                Trong{" "}
+                <a
+                  href="https://developer.x.com/en/portal/dashboard"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sky-400 underline"
+                >
+                  X Developer Portal
+                </a>{" "}
+                (User authentication settings → OAuth 2.0), hãy thêm Callback
+                URI sau:
+              </p>
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-700 bg-black px-3 py-2 font-mono text-[11px] text-sky-300">
+                <span className="truncate">{callbackUri}</span>
+                <button
+                  type="button"
+                  onClick={handleCopyCallback}
+                  className="shrink-0 inline-flex items-center gap-1 rounded bg-zinc-800 px-2 py-1 text-[10px] text-white hover:bg-zinc-700 cursor-pointer"
+                >
+                  <Copy className="h-3 w-3" />
+                  <span>{copied ? "Đã copy!" : "Copy"}</span>
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-medium text-zinc-300 mb-1">
-                Username 𝕏 cần kết nối <span className="text-sky-400">*</span>
+                X OAuth 2.0 Client ID <span className="text-rose-400">*</span>
               </label>
               <input
                 type="text"
                 required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="@username"
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder="Ví dụ: V1p6R2x... (từ X Developer Portal -> Keys and tokens)"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-xs font-mono text-white focus:border-sky-500 focus:outline-none"
               />
             </div>
 
             <div>
               <label className="block text-xs font-medium text-zinc-300 mb-1">
-                Tên hiển thị (Display Name)
+                X OAuth 2.0 Client Secret (Nếu chọn Web App / Confidential Client)
               </label>
               <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Tên tài khoản X"
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder="Để trống nếu chọn Single Page App / Native App (Public Client)"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-xs font-mono text-white focus:border-sky-500 focus:outline-none"
               />
             </div>
-          </div>
 
-          {/* Quick Account Presets */}
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-zinc-500">Chọn nhanh:</span>
-            {[
-              { u: "huanchain_x", n: "Huan Chain" },
-              { u: "jackydev95", n: "Jacky Dev" },
-              { u: "x_growth_pro", n: "X Growth Bot" },
-            ].map((preset) => (
-              <button
-                key={preset.u}
-                type="button"
-                onClick={() => {
-                  setUsername(preset.u);
-                  setDisplayName(preset.n);
-                  setEmail(`${preset.u}@x.com`);
-                }}
-                className="rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-zinc-300 hover:border-sky-500/50 hover:text-white cursor-pointer"
-              >
-                @{preset.u}
-              </button>
-            ))}
-          </div>
-
-          {/* Permissions Checklist */}
-          <div className="space-y-2 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3.5 text-xs text-zinc-300">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-              <span>
-                Cấp phát <strong>OAuth 2.0 Access Token</strong> &{" "}
-                <strong>Refresh Token</strong>
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-              <span>
-                Cho phép Cron Job tự động gọi{" "}
-                <code className="text-sky-300">
-                  POST /2/users/:id/following
-                </code>
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-              <span>
-                Đồng bộ trực tiếp vào trang <strong>Admin (/admin)</strong> và{" "}
-                <strong>Vercel Redis</strong>
-              </span>
-            </div>
-          </div>
-
-          {/* Optional Custom Token Toggle */}
-          <div>
-            <button
-              type="button"
-              onClick={() => setShowAdvancedToken((p) => !p)}
-              className="text-xs text-sky-400 hover:underline cursor-pointer"
-            >
-              {showAdvancedToken
-                ? "− Ẩn tùy chọn dán Access Token thật"
-                : "+ Đã có sẵn X Bearer / Access Token thật? Bấm để dán"}
-            </button>
-
-            {showAdvancedToken && (
-              <div className="mt-2.5 space-y-2.5 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
-                <input
-                  type="text"
-                  value={customAccessToken}
-                  onChange={(e) => setCustomAccessToken(e.target.value)}
-                  placeholder="Dán Access Token thật (tùy chọn, bỏ trống sẽ tự sinh token OAuth2)"
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-mono text-white"
-                />
-                <input
-                  type="text"
-                  value={customRefreshToken}
-                  onChange={(e) => setCustomRefreshToken(e.target.value)}
-                  placeholder="Dán Refresh Token thật (tùy chọn)"
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-mono text-white"
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Primary Authorize CTA */}
-          <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
             <button
               type="submit"
               disabled={submitting}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-bold text-black hover:bg-zinc-200 disabled:opacity-50 transition cursor-pointer shadow-lg"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-bold text-black hover:bg-zinc-200 disabled:opacity-50 transition cursor-pointer"
             >
-              <UserCheck className="h-4 w-4" />
-              <span>
-                {submitting
-                  ? "Đang ủy quyền & cấp Token..."
-                  : `Ủy quyền & Kết nối @${username.replace(/^@+/, "")}`}
-              </span>
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ExternalLink className="h-4 w-4" />
+              )}
+              <span>Đi tới X.com để Ủy quyền & Lấy Token</span>
             </button>
+          </form>
+        )}
 
-            <Link
-              href={returnTo}
-              className="w-full sm:w-auto text-center rounded-full border border-zinc-700 px-5 py-3 text-xs font-semibold text-zinc-300 hover:bg-zinc-900"
-            >
-              Hủy
-            </Link>
-          </div>
-        </form>
-
-        {/* Option to use Real X Developer Client ID redirect */}
-        <div className="border-t border-zinc-800/80 pt-4">
-          <button
-            type="button"
-            onClick={() => setShowRealClientIdBox((p) => !p)}
-            className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
-          >
-            <KeyRound className="h-3.5 w-3.5 text-sky-400" />
-            <span>
-              Muốn chuyển hướng sang trang <code>x.com/i/oauth2/authorize</code>{" "}
-              bằng Client ID của bạn?
-            </span>
-          </button>
-
-          {showRealClientIdBox && (
-            <div className="mt-3 space-y-2.5 rounded-xl border border-zinc-800 bg-zinc-900/80 p-3.5">
-              <p className="text-[11px] text-zinc-400">
-                Nhập <strong>X OAuth 2.0 Client ID</strong> từ{" "}
-                <code>developer.x.com</code> (Nhớ thêm Callback URI:{" "}
-                <code className="text-sky-300">
-                  {typeof window !== "undefined"
-                    ? `${window.location.origin}/api/auth/twitter/callback`
-                    : "/api/auth/twitter/callback"}
-                </code>
-                ):
+        {/* TAB 2: REAL X COOKIE SESSION (auth_token + ct0) */}
+        {tab === "cookie_session" && (
+          <form onSubmit={handleConnectCookie} className="space-y-4">
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-200 space-y-1.5">
+              <p className="font-semibold">
+                Khuyên dùng: Hoạt động 100% trên mọi tài khoản X (Không cần mua gói X API $100/tháng)
               </p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={realClientId}
-                  onChange={(e) => setRealClientId(e.target.value)}
-                  placeholder="Nhập X OAuth 2.0 Client ID..."
-                  className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white"
-                />
-                <button
-                  type="button"
-                  onClick={handleRedirectToOfficialX}
-                  disabled={!realClientId.trim() || submitting}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500 px-3.5 py-2 text-xs font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-50 cursor-pointer"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  <span>Đi tới X.com</span>
-                </button>
-              </div>
+              <p className="text-emerald-300/80">
+                Mở <code>https://x.com</code> → bấm <code>F12 (DevTools)</code>{" "}
+                → tab <code>Application</code> → <code>Cookies</code> → copy 2
+                giá trị <code>auth_token</code> và <code>ct0</code>. Hệ thống sẽ
+                xác thực trực tiếp với máy chủ X và thực thi Auto-Follow thật.
+              </p>
             </div>
-          )}
-        </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">
+                Cookie <code>auth_token</code>{" "}
+                <span className="text-rose-400">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={authToken}
+                onChange={(e) => setAuthToken(e.target.value)}
+                placeholder="Ví dụ: 84a9b2c1d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-xs font-mono text-white focus:border-sky-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">
+                Cookie <code>ct0</code> (CSRF Token){" "}
+                <span className="text-rose-400">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={ct0}
+                onChange={(e) => setCt0(e.target.value)}
+                placeholder="Ví dụ: 1a2b3c4d5e6f..."
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-xs font-mono text-white focus:border-sky-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-emerald-500 px-6 py-3 text-sm font-bold text-black hover:bg-emerald-400 disabled:opacity-50 transition cursor-pointer"
+            >
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-4 w-4" />
+              )}
+              <span>Xác thực Cookie X thật & Lưu vào Vercel Redis</span>
+            </button>
+          </form>
+        )}
+
+        {/* TAB 3: DIRECT ACCESS TOKEN */}
+        {tab === "bearer_token" && (
+          <form onSubmit={handleConnectBearerToken} className="space-y-4">
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3.5 text-xs text-zinc-300">
+              Dán trực tiếp <strong>OAuth 2.0 User Access Token</strong> đã lấy
+              từ X Developer Portal hoặc Postman. Hệ thống sẽ kiểm tra trực tiếp
+              qua <code>GET https://api.twitter.com/2/users/me</code>.
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">
+                OAuth 2.0 Access Token <span className="text-rose-400">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={accessToken}
+                onChange={(e) => setAccessToken(e.target.value)}
+                placeholder="Dán access_token..."
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-xs font-mono text-white focus:border-sky-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">
+                OAuth 2.0 Refresh Token (Tùy chọn)
+              </label>
+              <input
+                type="text"
+                value={refreshToken}
+                onChange={(e) => setRefreshToken(e.target.value)}
+                placeholder="Dán refresh_token (nếu có)..."
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-xs font-mono text-white focus:border-sky-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-sky-500 px-6 py-3 text-sm font-bold text-black hover:bg-sky-400 disabled:opacity-50 transition cursor-pointer"
+            >
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <KeyRound className="h-4 w-4" />
+              )}
+              <span>Kiểm tra qua /2/users/me & Lưu Token</span>
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -327,11 +437,11 @@ export default function XAuthorizePage() {
     <Suspense
       fallback={
         <div className="min-h-screen bg-black text-white flex items-center justify-center text-sm">
-          Đang khởi tạo phiên OAuth 2.0 PKCE...
+          Đang tải cổng xác thực X...
         </div>
       }
     >
-      <XAuthorizeContent />
+      <XRealAuthGatewayContent />
     </Suspense>
   );
 }

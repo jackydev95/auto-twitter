@@ -93,7 +93,12 @@ export default function XAutoFollowStudioPage() {
     "http://localhost:3000/api/auth/twitter/callback"
   );
 
-  // Manual token import state
+  // Manual token / Cookie import state
+  const [authImportMode, setAuthImportMode] = useState<"cookie" | "oauth2">(
+    "cookie"
+  );
+  const [cookieAuthToken, setCookieAuthToken] = useState("");
+  const [cookieCt0, setCookieCt0] = useState("");
   const [manualAccessToken, setManualAccessToken] = useState("");
   const [manualRefreshToken, setManualRefreshToken] = useState("");
   const [manualUsername, setManualUsername] = useState("");
@@ -305,20 +310,31 @@ export default function XAutoFollowStudioPage() {
     e.preventDefault();
     setSavingConfig(true);
     try {
+      const payload =
+        authImportMode === "cookie"
+          ? {
+              action: "import_cookie",
+              authToken: cookieAuthToken,
+              ct0: cookieCt0,
+            }
+          : {
+              action: "import_token",
+              accessToken: manualAccessToken,
+              refreshToken: manualRefreshToken,
+              username: manualUsername,
+              twitterUserId: manualUserId,
+              verifyOnline,
+            };
+
       const res = await fetch("/api/auth/twitter/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "import_token",
-          accessToken: manualAccessToken,
-          refreshToken: manualRefreshToken,
-          username: manualUsername,
-          twitterUserId: manualUserId,
-          verifyOnline,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Import token thất bại");
+      if (!res.ok) throw new Error(data.error || "Xác thực thất bại");
+      setCookieAuthToken("");
+      setCookieCt0("");
       setManualAccessToken("");
       setManualRefreshToken("");
       setManualUsername("");
@@ -326,40 +342,12 @@ export default function XAutoFollowStudioPage() {
       await fetchState(false);
       showNotice(
         "success",
-        `Đã lưu Token cho tài khoản @${data.account.username}!`
+        `Đã xác thực thật và lưu vào Vercel Redis cho tài khoản @${data.account.username} (ID: ${data.account.twitterUserId})!`
       );
     } catch (err) {
       showNotice(
         "error",
-        err instanceof Error ? err.message : "Không thể import token"
-      );
-    } finally {
-      setSavingConfig(false);
-    }
-  };
-
-  const handleCreateSandboxToken = async () => {
-    setSavingConfig(true);
-    try {
-      const res = await fetch("/api/auth/twitter/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "create_sandbox_token",
-          username: manualUsername || "x_auto_hunter",
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      await fetchState(false);
-      showNotice(
-        "success",
-        `Đã tạo Token Sandbox cho @${data.account.username}. Bạn có thể bấm "Chạy Cron Follow Ngay" để test luồng tự động follow!`
-      );
-    } catch (err) {
-      showNotice(
-        "error",
-        err instanceof Error ? err.message : "Lỗi tạo Sandbox Token"
+        err instanceof Error ? err.message : "Không thể xác thực tài khoản X"
       );
     } finally {
       setSavingConfig(false);
@@ -589,11 +577,9 @@ export default function XAutoFollowStudioPage() {
               {activeAccount ? (
                 <span className="font-medium text-slate-200">
                   @{activeAccount.username}
-                  {activeAccount.isSimulated && (
-                    <span className="ml-1.5 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
-                      Sandbox
-                    </span>
-                  )}
+                  <span className="ml-1.5 rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                    {activeAccount.authType === "cookie" ? "Cookie Auth" : "OAuth 2.0"}
+                  </span>
                 </span>
               ) : (
                 <span className="text-amber-300">Chưa có Token</span>
@@ -963,112 +949,187 @@ export default function XAutoFollowStudioPage() {
                 </form>
               </div>
 
-              {/* Right card: Manual Token Input & 1-Click Sandbox Token */}
+              {/* Right card: Real X Session Cookie (auth_token + ct0) or Direct Access Token */}
               <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 space-y-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 text-xs font-medium text-emerald-400">
-                      Cách 2: Dán Token trực tiếp / Tạo Sandbox Token
+                      Cách 2: Kết nối bằng Cookie X (auth_token + ct0) hoặc Access Token
                     </span>
                     <h2 className="mt-2 text-base font-bold text-white">
-                      Nhập sẵn Access Token hoặc Tạo Token Test
+                      Xác thực trực tiếp tài khoản X thật (Hoạt động 100%)
                     </h2>
                     <p className="mt-1 text-xs text-slate-400">
-                      Nếu bạn đã lấy Bearer / OAuth2 User Access Token từ nơi
-                      khác, dán vào đây hoặc tạo Token Sandbox để test Cron Job
-                      ngay lập tức.
+                      Hỗ trợ xác thực bằng Cookie trình duyệt (
+                      <code className="text-emerald-300">auth_token</code> +{" "}
+                      <code className="text-emerald-300">ct0</code>) để đi
+                      follow thật mà không bị giới hạn gói trả phí X API, hoặc
+                      dán OAuth 2.0 Access Token.
                     </p>
                   </div>
                 </div>
 
+                <div className="flex gap-2 rounded-lg bg-slate-950 p-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAuthImportMode("cookie")}
+                    className={`flex-1 rounded-md py-1.5 font-semibold transition cursor-pointer ${
+                      authImportMode === "cookie"
+                        ? "bg-emerald-500 text-slate-950"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Cookie X (auth_token + ct0)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthImportMode("oauth2")}
+                    className={`flex-1 rounded-md py-1.5 font-semibold transition cursor-pointer ${
+                      authImportMode === "oauth2"
+                        ? "bg-sky-500 text-slate-950"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    OAuth 2.0 Access Token
+                  </button>
+                </div>
+
                 <form onSubmit={handleImportManualToken} className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Access Token (OAuth 2.0 User Context){" "}
-                      <span className="text-rose-400">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={manualAccessToken}
-                      onChange={(e) => setManualAccessToken(e.target.value)}
-                      placeholder="Dán access_token vào đây..."
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
-                    />
-                  </div>
+                  {authImportMode === "cookie" ? (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">
+                          Cookie <code>auth_token</code> (từ x.com → F12 → Application → Cookies){" "}
+                          <span className="text-rose-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={cookieAuthToken}
+                          onChange={(e) => setCookieAuthToken(e.target.value)}
+                          placeholder="Dán giá trị auth_token từ trình duyệt đang đăng nhập X..."
+                          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Refresh Token (Khuyên dùng để Cron tự gia hạn token)
-                    </label>
-                    <input
-                      type="text"
-                      value={manualRefreshToken}
-                      onChange={(e) => setManualRefreshToken(e.target.value)}
-                      placeholder="Dán refresh_token (nếu có)..."
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
-                    />
-                  </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">
+                          Cookie <code>ct0</code> (CSRF Token){" "}
+                          <span className="text-rose-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={cookieCt0}
+                          onChange={(e) => setCookieCt0(e.target.value)}
+                          placeholder="Dán giá trị ct0 từ trình duyệt..."
+                          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
 
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        Username X (Tùy chọn)
+                      <div className="pt-1">
+                        <button
+                          type="submit"
+                          disabled={
+                            savingConfig ||
+                            !cookieAuthToken.trim() ||
+                            !cookieCt0.trim()
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 transition cursor-pointer"
+                        >
+                          <ShieldCheck className="h-4 w-4" />
+                          <span>
+                            Xác thực Cookie X Thật & Lưu vào Vercel Redis
+                          </span>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">
+                          Access Token (OAuth 2.0 User Context){" "}
+                          <span className="text-rose-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={manualAccessToken}
+                          onChange={(e) =>
+                            setManualAccessToken(e.target.value)
+                          }
+                          placeholder="Dán access_token vào đây..."
+                          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">
+                          Refresh Token (Để Cron tự gia hạn token)
+                        </label>
+                        <input
+                          type="text"
+                          value={manualRefreshToken}
+                          onChange={(e) =>
+                            setManualRefreshToken(e.target.value)
+                          }
+                          placeholder="Dán refresh_token (nếu có)..."
+                          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1">
+                            Username X (Tùy chọn)
+                          </label>
+                          <input
+                            type="text"
+                            value={manualUsername}
+                            onChange={(e) => setManualUsername(e.target.value)}
+                            placeholder="vd: my_twitter_acc"
+                            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1">
+                            Twitter User ID (Tùy chọn)
+                          </label>
+                          <input
+                            type="text"
+                            value={manualUserId}
+                            onChange={(e) => setManualUserId(e.target.value)}
+                            placeholder="vd: 14567890123"
+                            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={verifyOnline}
+                          onChange={(e) => setVerifyOnline(e.target.checked)}
+                          className="rounded border-slate-700 bg-slate-950 text-sky-500"
+                        />
+                        <span>
+                          Xác thực online qua{" "}
+                          <code className="text-sky-300">GET /2/users/me</code>
+                        </span>
                       </label>
-                      <input
-                        type="text"
-                        value={manualUsername}
-                        onChange={(e) => setManualUsername(e.target.value)}
-                        placeholder="vd: my_twitter_acc"
-                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        Twitter User ID (Tùy chọn)
-                      </label>
-                      <input
-                        type="text"
-                        value={manualUserId}
-                        onChange={(e) => setManualUserId(e.target.value)}
-                        placeholder="vd: 14567890123"
-                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
 
-                  <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={verifyOnline}
-                      onChange={(e) => setVerifyOnline(e.target.checked)}
-                      className="rounded border-slate-700 bg-slate-950 text-sky-500"
-                    />
-                    <span>
-                      Tự động kiểm tra token & lấy User ID qua{" "}
-                      <code className="text-sky-300">GET /2/users/me</code>
-                    </span>
-                  </label>
-
-                  <div className="flex flex-wrap items-center gap-2.5 pt-2">
-                    <button
-                      type="submit"
-                      disabled={savingConfig || !manualAccessToken.trim()}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 transition cursor-pointer"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span>Lưu Token Thủ Công</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleCreateSandboxToken}
-                      disabled={savingConfig}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3.5 py-2 text-xs font-medium text-amber-300 hover:bg-amber-500/20 transition cursor-pointer"
-                    >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span>Tạo Token Sandbox (Test Nhanh)</span>
-                    </button>
-                  </div>
+                      <div className="pt-1">
+                        <button
+                          type="submit"
+                          disabled={savingConfig || !manualAccessToken.trim()}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500 px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition cursor-pointer"
+                        >
+                          <Plus className="h-4 w-4" />
+                          <span>Xác thực & Lưu Access Token</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </form>
               </div>
             </div>
@@ -1134,11 +1195,11 @@ export default function XAutoFollowStudioPage() {
                                     Đang dùng cho Cron
                                   </span>
                                 )}
-                                {acc.isSimulated && (
-                                  <span className="rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[11px] text-amber-300">
-                                    Sandbox Mode
-                                  </span>
-                                )}
+                                <span className="rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[11px] text-sky-300">
+                                  {acc.authType === "cookie"
+                                    ? "Cookie Session (auth_token + ct0)"
+                                    : "OAuth 2.0 Token"}
+                                </span>
                               </div>
                               <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-slate-400">
                                 <span>

@@ -59,3 +59,4 @@ export function writeAccountToCookie(
     // Ignore cookie size errors
   }
 }
+

@@ -12,8 +12,9 @@ import {
   TwitterOAuthConfig,
 } from "./types";
 
-export const REDIS_DB_KEY = "auto_twitter:db:v1";
-export const REDIS_CRON_LOCK_KEY = "auto_twitter:cron_lock";
+export const REDIS_DB_KEY = "auto_twitter:prod_db:v2";
+export const REDIS_CRON_LOCK_KEY = "auto_twitter:cron_lock:v2";
+export const REDIS_PKCE_PREFIX = "auto_twitter:pkce:";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const PRIMARY_DB_PATH = path.join(DATA_DIR, "twitter-tools-db.json");
@@ -27,181 +28,82 @@ const DEFAULT_SCOPES = [
   "offline.access",
 ];
 
-function createSeedAccounts(now: string): TwitterAccount[] {
-  const inTwoHours = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
-  const inSixHours = new Date(Date.now() + 6 * 3600 * 1000).toISOString();
-  const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-
-  return [
-    {
-      id: "acc-seed-1",
-      twitterUserId: "1589203411",
-      username: "wilbert_williams",
-      name: "Wilbert Williams",
-      email: "wilbert.williams@adminify.io",
-      role: "admin",
-      accountStatus: "active",
-      accessToken: "x_oauth2_at_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e",
-      refreshToken: "x_oauth2_rt_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f",
-      expiresAt: inSixHours,
-      scopes: DEFAULT_SCOPES,
-      tokenType: "bearer",
-      isActive: true,
-      cronEnabled: true,
-      isSimulated: true,
-      followersCount: 9600,
-      followingCount: 1420,
-      totalAutoFollowed: 184,
-      lastUsedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: "acc-seed-2",
-      twitterUserId: "1720491823",
-      username: "christian_ochoa",
-      name: "Christian Ochoa",
-      email: "christian.ochoa@xgrowth.dev",
-      role: "vip",
-      accountStatus: "active",
-      accessToken: "x_oauth2_at_4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b",
-      refreshToken: "x_oauth2_rt_8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a",
-      expiresAt: inTwoHours,
-      scopes: DEFAULT_SCOPES,
-      tokenType: "bearer",
-      isActive: false,
-      cronEnabled: true,
-      isSimulated: true,
-      followersCount: 6900,
-      followingCount: 980,
-      totalAutoFollowed: 96,
-      lastUsedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: "acc-seed-3",
-      twitterUserId: "1893012944",
-      username: "socorro_decker",
-      name: "Socorro Decker",
-      email: "socorro.decker@creatorhub.co",
-      role: "vip",
-      accountStatus: "active",
-      accessToken: "x_oauth2_at_7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a",
-      refreshToken: "x_oauth2_rt_5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f",
-      expiresAt: inSixHours,
-      scopes: DEFAULT_SCOPES,
-      tokenType: "bearer",
-      isActive: false,
-      cronEnabled: true,
-      isSimulated: true,
-      followersCount: 8300,
-      followingCount: 650,
-      totalAutoFollowed: 72,
-      lastUsedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: "acc-seed-4",
-      twitterUserId: "1940192831",
-      username: "haywood_sharp",
-      name: "Haywood Sharp",
-      email: "haywood.sharp@indiehack.org",
-      role: "member",
-      accountStatus: "expired",
-      accessToken: "x_oauth2_at_2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
-      refreshToken: "x_oauth2_rt_9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f",
-      expiresAt: yesterday,
-      scopes: ["tweet.read", "users.read", "follows.read", "follows.write"],
-      tokenType: "bearer",
-      isActive: false,
-      cronEnabled: false,
-      isSimulated: true,
-      followersCount: 3450,
-      followingCount: 410,
-      totalAutoFollowed: 28,
-      lastUsedAt: yesterday,
-      createdAt: yesterday,
-      updatedAt: now,
-    },
-  ];
-}
-
 export function createInitialDb(): AppDatabase {
   const now = new Date().toISOString();
+  const defaultRedirect = process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}/api/auth/twitter/callback`
+    : "https://auto-twitter.vercel.app/api/auth/twitter/callback";
+
   return {
     oauthConfig: {
       clientId: process.env.TWITTER_CLIENT_ID || "",
       clientSecret: process.env.TWITTER_CLIENT_SECRET || "",
-      redirectUri:
-        process.env.TWITTER_REDIRECT_URI ||
-        "http://localhost:3000/api/auth/twitter/callback",
+      redirectUri: process.env.TWITTER_REDIRECT_URI || defaultRedirect,
       scopes: DEFAULT_SCOPES,
     },
-    accounts: createSeedAccounts(now),
+    accounts: [],
     targets: [
       {
-        id: "target-seed-1",
+        id: "target-1",
         username: "vercel",
         twitterUserId: "1176150436409585664",
         displayName: "Vercel",
         bio: "Develop. Preview. Ship. Creators of Next.js.",
         followersCount: 642000,
         source: "manual",
-        sourceNote: "Seeded tech account",
+        sourceNote: "Official @vercel",
         status: "pending",
         attempts: 0,
         createdAt: now,
       },
       {
-        id: "target-seed-2",
+        id: "target-2",
         username: "nextjs",
         twitterUserId: "1060242429231079424",
         displayName: "Next.js",
         bio: "The React Framework for the Web by @vercel",
         followersCount: 398000,
         source: "manual",
-        sourceNote: "Seeded tech account",
+        sourceNote: "Official @nextjs",
         status: "pending",
         attempts: 0,
         createdAt: now,
       },
       {
-        id: "target-seed-3",
+        id: "target-3",
         username: "shadcn",
         twitterUserId: "14940343",
         displayName: "shadcn",
         bio: "Building ui.shadcn.com & @vercel",
         followersCount: 285000,
         source: "manual",
-        sourceNote: "Seeded creator account",
+        sourceNote: "Official @shadcn",
         status: "pending",
         attempts: 0,
         createdAt: now,
       },
       {
-        id: "target-seed-4",
+        id: "target-4",
         username: "rauchg",
         twitterUserId: "15237107",
         displayName: "Guillermo Rauch",
         bio: "CEO @vercel",
         followersCount: 410000,
         source: "manual",
-        sourceNote: "Seeded founder account",
+        sourceNote: "Official @rauchg",
         status: "pending",
         attempts: 0,
         createdAt: now,
       },
       {
-        id: "target-seed-5",
+        id: "target-5",
         username: "leeerob",
         twitterUserId: "16093683",
         displayName: "Lee Robinson",
         bio: "VP of DX @vercel",
         followersCount: 240000,
         source: "manual",
-        sourceNote: "Seeded devrel account",
+        sourceNote: "Official @leeerob",
         status: "pending",
         attempts: 0,
         createdAt: now,
@@ -212,8 +114,8 @@ export function createInitialDb(): AppDatabase {
       cronExpression: "*/15 * * * *",
       maxFollowsPerRun: 3,
       dailyFollowLimit: 40,
-      delayMinMs: 1200,
-      delayMaxMs: 3000,
+      delayMinMs: 1500,
+      delayMaxMs: 3500,
       autoRefreshToken: true,
       skipProtectedUsers: true,
       dryRunMode: false,
@@ -229,11 +131,6 @@ function normalizeDb(parsed?: Partial<AppDatabase> | null): AppDatabase {
   const defaults = createInitialDb();
   if (!parsed) return defaults;
 
-  const accounts =
-    parsed.accounts && parsed.accounts.length > 0
-      ? parsed.accounts
-      : defaults.accounts;
-
   return {
     oauthConfig: {
       ...defaults.oauthConfig,
@@ -245,14 +142,16 @@ function normalizeDb(parsed?: Partial<AppDatabase> | null): AppDatabase {
         process.env.TWITTER_CLIENT_SECRET ||
         "",
     },
-    accounts,
-    targets: parsed.targets || defaults.targets,
+    accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
+    targets: Array.isArray(parsed.targets) ? parsed.targets : defaults.targets,
     cronConfig: {
       ...defaults.cronConfig,
       ...(parsed.cronConfig || {}),
     },
-    logs: parsed.logs || [],
-    pkceSessions: parsed.pkceSessions || [],
+    logs: Array.isArray(parsed.logs) ? parsed.logs : [],
+    pkceSessions: Array.isArray(parsed.pkceSessions)
+      ? parsed.pkceSessions
+      : [],
   };
 }
 
@@ -341,10 +240,9 @@ export async function readDb(): Promise<AppDatabase> {
     try {
       const existing = await redis.get<AppDatabase>(REDIS_DB_KEY);
       if (!existing) {
-        // Seed initial data from local fallback or default into Vercel Redis
-        const seed = readLocalFallbackDb();
-        await redis.set(REDIS_DB_KEY, seed);
-        return seed;
+        const initial = createInitialDb();
+        await redis.set(REDIS_DB_KEY, initial);
+        return initial;
       }
       return normalizeDb(existing);
     } catch (err) {
@@ -369,7 +267,6 @@ export async function writeDb(db: AppDatabase): Promise<void> {
     }
   }
 
-  // Also keep local cache updated when possible
   writeLocalFallbackDb(db);
 }
 
@@ -415,6 +312,16 @@ export async function updateOAuthConfig(
 }
 
 export async function savePKCESession(session: PKCESession): Promise<void> {
+  const redis = getRedisClient();
+  if (redis) {
+    try {
+      await redis.set(`${REDIS_PKCE_PREFIX}${session.state}`, session, {
+        ex: 900,
+      });
+    } catch {
+      // Fallback to db.pkceSessions
+    }
+  }
   const db = await readDb();
   db.pkceSessions.push(session);
   await writeDb(db);
@@ -423,6 +330,20 @@ export async function savePKCESession(session: PKCESession): Promise<void> {
 export async function consumePKCESession(
   state: string
 ): Promise<PKCESession | undefined> {
+  const redis = getRedisClient();
+  if (redis) {
+    try {
+      const key = `${REDIS_PKCE_PREFIX}${state}`;
+      const session = await redis.get<PKCESession>(key);
+      if (session) {
+        await redis.del(key);
+        return session;
+      }
+    } catch {
+      // Fallback to db.pkceSessions
+    }
+  }
+
   const db = await readDb();
   const idx = db.pkceSessions.findIndex((s) => s.state === state);
   if (idx === -1) return undefined;
@@ -468,10 +389,11 @@ export async function upsertAccount(
     saved = {
       ...existing,
       ...accountData,
+      authType: accountData.authType ?? existing.authType ?? "oauth2",
       email:
         accountData.email ??
         existing.email ??
-        `${accountData.username}@x-user.io`,
+        `${accountData.username}@x.com`,
       role: accountData.role ?? existing.role ?? "member",
       accountStatus:
         accountData.accountStatus ?? existing.accountStatus ?? "active",
@@ -486,7 +408,8 @@ export async function upsertAccount(
     saved = {
       ...accountData,
       id: accountData.id || `acc-${crypto.randomUUID().slice(0, 8)}`,
-      email: accountData.email || `${accountData.username}@x-user.io`,
+      authType: accountData.authType || "oauth2",
+      email: accountData.email || `${accountData.username}@x.com`,
       role: accountData.role || "member",
       accountStatus: accountData.accountStatus || "active",
       cronEnabled: accountData.cronEnabled ?? true,

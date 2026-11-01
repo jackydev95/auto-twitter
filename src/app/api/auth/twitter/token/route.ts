@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   appendLog,
@@ -11,6 +10,7 @@ import {
 import {
   fetchTwitterMe,
   refreshAccountAccessToken,
+  verifyTwitterCookieSession,
 } from "@/lib/twitter-api";
 import {
   syncCookieAccountsIntoStore,
@@ -23,6 +23,63 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { action } = body;
 
+    if (action === "import_cookie") {
+      const authToken = (body.authToken || "").trim();
+      const ct0 = (body.ct0 || "").trim();
+
+      if (!authToken || !ct0) {
+        return NextResponse.json(
+          {
+            error:
+              "Vui lòng nhập đầy đủ cả hai giá trị cookie: auth_token và ct0 từ trình duyệt đang đăng nhập X.com.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const verifiedProfile = await verifyTwitterCookieSession(authToken, ct0);
+
+      const saved = await upsertAccount({
+        twitterUserId: verifiedProfile.id,
+        username: verifiedProfile.username,
+        name: verifiedProfile.name,
+        email: body.email || `${verifiedProfile.username}@x.com`,
+        role: body.role || "vip",
+        accountStatus: "active",
+        profileImageUrl: verifiedProfile.profile_image_url,
+        authType: "cookie",
+        accessToken: authToken,
+        ct0,
+        scopes: [
+          "tweet.read",
+          "users.read",
+          "follows.read",
+          "follows.write",
+          "cookie.session",
+        ],
+        tokenType: "cookie_session",
+        isActive: true,
+        cronEnabled: true,
+        followersCount: verifiedProfile.public_metrics?.followers_count,
+        followingCount: verifiedProfile.public_metrics?.following_count,
+      });
+
+      await appendLog({
+        runId: `cookie-${Date.now()}`,
+        trigger: "manual",
+        accountId: saved.id,
+        accountUsername: saved.username,
+        action: "token_refresh",
+        status: "success",
+        message: `Đã xác thực Cookie X (auth_token + ct0) thành công cho @${saved.username} (ID: ${saved.twitterUserId})`,
+        httpStatus: 200,
+      });
+
+      const res = NextResponse.json({ ok: true, account: saved });
+      writeAccountToCookie(req, res, saved);
+      return res;
+    }
+
     if (action === "import_token") {
       const accessToken = (body.accessToken || "").trim();
       const refreshToken = (body.refreshToken || "").trim() || undefined;
@@ -30,7 +87,7 @@ export async function POST(req: NextRequest) {
 
       if (!accessToken) {
         return NextResponse.json(
-          { error: "Access Token is required." },
+          { error: "Vui lòng nhập OAuth 2.0 Access Token." },
           { status: 400 }
         );
       }
@@ -46,34 +103,27 @@ export async function POST(req: NextRequest) {
         ? Number(body.followingCount)
         : undefined;
 
-      if (verifyOnline && !body.isSimulated) {
-        try {
-          const me = await fetchTwitterMe(accessToken);
-          twitterUserId = me.id;
-          username = me.username;
-          name = me.name;
-          profileImageUrl = me.profile_image_url;
-          followersCount = me.public_metrics?.followers_count;
-          followingCount = me.public_metrics?.following_count;
-        } catch (verifyErr) {
-          if (!username || !twitterUserId) {
-            return NextResponse.json(
-              {
-                error:
-                  verifyErr instanceof Error
-                    ? `${verifyErr.message}. (Tip: Provide Username & User ID or uncheck 'Verify online via /2/users/me' if using a restricted token)`
-                    : "Failed to verify token with X API /2/users/me",
-              },
-              { status: 400 }
-            );
-          }
+      if (verifyOnline) {
+        const me = await fetchTwitterMe(accessToken);
+        twitterUserId = me.id;
+        username = me.username;
+        name = me.name;
+        profileImageUrl = me.profile_image_url;
+        followersCount = me.public_metrics?.followers_count;
+        followingCount = me.public_metrics?.following_count;
+      } else {
+        if (!username || !twitterUserId) {
+          return NextResponse.json(
+            {
+              error:
+                "Khi bỏ chọn kiểm tra online qua /2/users/me, bạn bắt buộc phải nhập Username và Twitter User ID thật của tài khoản.",
+            },
+            { status: 400 }
+          );
         }
       }
 
-      if (!username) username = `x_user_${Date.now().toString().slice(-4)}`;
-      if (!twitterUserId)
-        twitterUserId = `${Math.floor(100000000 + Math.random() * 900000000)}`;
-      if (!name) name = body.name || `@${username}`;
+      if (!name) name = `@${username}`;
 
       const expiresInHours = Number(body.expiresInHours) || 2;
       const expiresAt = new Date(
@@ -84,10 +134,11 @@ export async function POST(req: NextRequest) {
         twitterUserId,
         username,
         name,
-        email: body.email || `${username}@x-user.io`,
+        email: body.email || `${username}@x.com`,
         role: body.role || "member",
         accountStatus: body.accountStatus || "active",
         profileImageUrl,
+        authType: "oauth2",
         accessToken,
         refreshToken,
         expiresAt,
@@ -104,9 +155,8 @@ export async function POST(req: NextRequest) {
         isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
         cronEnabled:
           body.cronEnabled !== undefined ? Boolean(body.cronEnabled) : true,
-        isSimulated: Boolean(body.isSimulated),
-        followersCount: followersCount ?? 1200,
-        followingCount: followingCount ?? 340,
+        followersCount: followersCount ?? 0,
+        followingCount: followingCount ?? 0,
       });
 
       await appendLog({
@@ -115,8 +165,8 @@ export async function POST(req: NextRequest) {
         accountId: saved.id,
         accountUsername: saved.username,
         action: "token_refresh",
-        status: saved.isSimulated ? "dry_run" : "success",
-        message: `Saved OAuth 2.0 token in Vercel Redis for @${saved.username} (ID: ${saved.twitterUserId})`,
+        status: "success",
+        message: `Đã lưu OAuth 2.0 Token cho @${saved.username} (ID: ${saved.twitterUserId}) vào Vercel Redis`,
         httpStatus: 200,
       });
 
@@ -143,8 +193,10 @@ export async function POST(req: NextRequest) {
         email: body.email,
         role: body.role,
         accountStatus: body.accountStatus,
+        authType: body.authType,
         accessToken: body.accessToken,
         refreshToken: body.refreshToken,
+        ct0: body.ct0,
         expiresAt: body.expiresAt,
         scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
         cronEnabled:
@@ -153,10 +205,6 @@ export async function POST(req: NextRequest) {
             : undefined,
         isActive:
           typeof body.isActive === "boolean" ? body.isActive : undefined,
-        isSimulated:
-          typeof body.isSimulated === "boolean"
-            ? body.isSimulated
-            : undefined,
       });
 
       if (!updated) {
@@ -167,60 +215,6 @@ export async function POST(req: NextRequest) {
       }
 
       return NextResponse.json({ ok: true, account: updated });
-    }
-
-    if (action === "create_sandbox_token") {
-      const customHandle = (body.username || "x_growth_bot")
-        .trim()
-        .replace(/^@+/, "");
-      const simAccessToken = `x_oauth2_at_${crypto
-        .randomBytes(18)
-        .toString("hex")}`;
-      const simRefreshToken = `x_oauth2_rt_${crypto
-        .randomBytes(18)
-        .toString("hex")}`;
-      const expiresAt = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
-
-      const saved = await upsertAccount({
-        twitterUserId: `${Math.floor(1000000000 + Math.random() * 900000000)}`,
-        username: customHandle,
-        name: body.name || `${customHandle}`,
-        email: body.email || `${customHandle}@x-sandbox.dev`,
-        role: body.role || "vip",
-        accountStatus: "active",
-        accessToken: simAccessToken,
-        refreshToken: simRefreshToken,
-        expiresAt,
-        scopes: [
-          "tweet.read",
-          "users.read",
-          "follows.read",
-          "follows.write",
-          "offline.access",
-        ],
-        tokenType: "bearer",
-        isActive: true,
-        cronEnabled: true,
-        isSimulated: true,
-        followersCount: Math.floor(800 + Math.random() * 8500),
-        followingCount: Math.floor(150 + Math.random() * 900),
-        totalAutoFollowed: Math.floor(10 + Math.random() * 120),
-      });
-
-      await appendLog({
-        runId: `sandbox-${Date.now()}`,
-        trigger: "manual",
-        accountId: saved.id,
-        accountUsername: saved.username,
-        action: "token_refresh",
-        status: "dry_run",
-        message: `Generated Sandbox OAuth 2.0 token in Vercel Redis for @${saved.username}`,
-        httpStatus: 200,
-      });
-
-      const res = NextResponse.json({ ok: true, account: saved });
-      writeAccountToCookie(req, res, saved);
-      return res;
     }
 
     if (action === "refresh_token") {

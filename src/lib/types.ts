@@ -7,6 +7,7 @@ export interface TwitterOAuthConfig {
 
 export type UserAccountStatus = "active" | "expired" | "suspended";
 export type UserRole = "admin" | "vip" | "member";
+export type TwitterAuthType = "oauth2" | "cookie";
 
 export interface TwitterAccount {
   id: string;
@@ -17,14 +18,15 @@ export interface TwitterAccount {
   role?: UserRole;
   accountStatus?: UserAccountStatus;
   profileImageUrl?: string;
-  accessToken: string;
-  refreshToken?: string;
+  authType?: TwitterAuthType;
+  accessToken: string; // OAuth 2.0 access_token OR X auth_token cookie
+  refreshToken?: string; // OAuth 2.0 refresh_token
+  ct0?: string; // X ct0 CSRF cookie (when authType === "cookie")
   expiresAt?: string; // ISO timestamp
   scopes: string[];
   tokenType: string;
   isActive: boolean;
   cronEnabled?: boolean;
-  isSimulated?: boolean;
   followersCount?: number;
   followingCount?: number;
   totalAutoFollowed?: number;
@@ -93,6 +95,7 @@ export interface PKCESession {
   state: string;
   codeVerifier: string;
   redirectUri: string;
+  returnTo?: string;
   createdAt: string;
 }
 

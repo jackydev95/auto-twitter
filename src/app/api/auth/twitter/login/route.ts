@@ -1,26 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createOAuthAuthorizationUrl } from "@/lib/twitter-api";
+import { getOAuthConfig, updateOAuthConfig } from "@/lib/store";
 
 export const PKCE_COOKIE_NAME = "x_oauth_pkce_session";
 
 export async function GET(req: NextRequest) {
   try {
     const mode = req.nextUrl.searchParams.get("mode");
-    const forceInteractive =
-      req.nextUrl.searchParams.get("interactive") === "1";
     const returnTo = req.nextUrl.searchParams.get("return_to") || "/";
+    const clientIdParam = req.nextUrl.searchParams.get("client_id")?.trim();
 
-    const {
-      authorizationUrl,
-      state,
-      codeVerifier,
-      redirectUri,
-      isInteractivePortal,
-    } = await createOAuthAuthorizationUrl({
-      origin: req.nextUrl.origin,
-      forceInteractivePortal: forceInteractive,
-      returnTo,
-    });
+    if (clientIdParam) {
+      await updateOAuthConfig({
+        clientId: clientIdParam,
+        redirectUri: `${req.nextUrl.origin}/api/auth/twitter/callback`,
+      });
+    }
+
+    const config = await getOAuthConfig();
+
+    // If Client ID is not configured yet, open the Real X Connect Gateway (/oauth/x-authorize)
+    if (!config.clientId?.trim()) {
+      const gatewayUrl = new URL("/oauth/x-authorize", req.nextUrl.origin);
+      gatewayUrl.searchParams.set("return_to", returnTo);
+      if (mode === "json") {
+        return NextResponse.json({
+          authorizationUrl: gatewayUrl.toString(),
+          requiresSetup: true,
+        });
+      }
+      return NextResponse.redirect(gatewayUrl);
+    }
+
+    const { authorizationUrl, state, codeVerifier, redirectUri } =
+      await createOAuthAuthorizationUrl({
+        origin: req.nextUrl.origin,
+        returnTo,
+      });
 
     const cookiePayload = Buffer.from(
       JSON.stringify({ state, codeVerifier, redirectUri, returnTo }),
@@ -31,7 +47,6 @@ export async function GET(req: NextRequest) {
       const res = NextResponse.json({
         authorizationUrl,
         state,
-        isInteractivePortal,
       });
       res.cookies.set(PKCE_COOKIE_NAME, cookiePayload, {
         path: "/",
@@ -58,8 +73,8 @@ export async function GET(req: NextRequest) {
     if (req.nextUrl.searchParams.get("mode") === "json") {
       return NextResponse.json({ error: msg }, { status: 400 });
     }
-    const redirectUrl = new URL("/", req.nextUrl.origin);
-    redirectUrl.searchParams.set("auth_error", msg);
+    const redirectUrl = new URL("/oauth/x-authorize", req.nextUrl.origin);
+    redirectUrl.searchParams.set("error", msg);
     return NextResponse.redirect(redirectUrl);
   }
 }
@@ -67,18 +82,25 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const {
-      authorizationUrl,
-      state,
-      codeVerifier,
-      redirectUri,
-      isInteractivePortal,
-    } = await createOAuthAuthorizationUrl({
-      customRedirectUri: body.redirectUri,
-      origin: req.nextUrl.origin,
-      forceInteractivePortal: Boolean(body.forceInteractivePortal),
-      returnTo: body.returnTo || "/",
-    });
+    if (body.clientId) {
+      await updateOAuthConfig({
+        clientId: String(body.clientId).trim(),
+        clientSecret: body.clientSecret
+          ? String(body.clientSecret).trim()
+          : undefined,
+        redirectUri:
+          body.redirectUri ||
+          `${req.nextUrl.origin}/api/auth/twitter/callback`,
+      });
+    }
+
+    const { authorizationUrl, state, codeVerifier, redirectUri } =
+      await createOAuthAuthorizationUrl({
+        customRedirectUri: body.redirectUri,
+        origin: req.nextUrl.origin,
+        returnTo: body.returnTo || "/",
+        clientIdOverride: body.clientId,
+      });
 
     const cookiePayload = Buffer.from(
       JSON.stringify({
@@ -93,7 +115,6 @@ export async function POST(req: NextRequest) {
     const res = NextResponse.json({
       authorizationUrl,
       state,
-      isInteractivePortal,
     });
     res.cookies.set(PKCE_COOKIE_NAME, cookiePayload, {
       path: "/",

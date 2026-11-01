@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
 
       if (items.length === 0) {
         return NextResponse.json(
-          { error: "Please provide at least one valid X username." },
+          { error: "Vui lòng nhập ít nhất một username X hợp lệ." },
           { status: 400 }
         );
       }
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
 
       if (!sourceUsername) {
         return NextResponse.json(
-          { error: "Please enter a target username to fetch followers from." },
+          { error: "Vui lòng nhập username tài khoản X cần quét followers." },
           { status: 400 }
         );
       }
@@ -89,41 +89,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             error:
-              "Connect or select an active X token first before importing followers.",
+              "Vui lòng kết nối tài khoản X (OAuth 2.0 hoặc Cookie) trước khi quét followers.",
           },
           { status: 400 }
         );
       }
 
-      if (activeAccount.isSimulated) {
-        const sampleFollowers = Array.from({
-          length: Math.min(maxResults, 10),
-        }).map((_, idx) => {
-          const suffix = Math.floor(100 + Math.random() * 899);
-          const uname = `${sourceUsername}_fan_${idx + 1}_${suffix}`;
-          return {
-            username: uname,
-            twitterUserId: `18000${Date.now().toString().slice(-6)}${idx}`,
-            displayName: `${sourceUsername} Follower #${idx + 1}`,
-            bio: `Builder & follower of @${sourceUsername} on X`,
-            followersCount: Math.floor(50 + Math.random() * 2500),
-            source: "followers_import" as const,
-            sourceNote: `Followers of @${sourceUsername}`,
-          };
-        });
-
-        const result = await addTargets(sampleFollowers);
-        return NextResponse.json({
-          ok: true,
-          added: result.added,
-          skippedDuplicates: result.skippedDuplicates,
-          targets: result.targets,
-          simulated: true,
-        });
-      }
-
       const followers = await fetchUserFollowersFromTwitter(
-        activeAccount.accessToken,
+        activeAccount,
         sourceUsername,
         maxResults
       );

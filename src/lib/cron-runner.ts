@@ -87,7 +87,7 @@ export async function runAutoFollowJob(
 
     if (!account) {
       const msg =
-        "No active Twitter/X account found. Authenticate or add a token first.";
+        "Chưa có tài khoản X nào được kết nối. Vui lòng xác thực OAuth 2.0 hoặc nhập Token/Cookie trước.";
       const log = await appendLog({
         runId,
         trigger,
@@ -152,7 +152,7 @@ export async function runAutoFollowJob(
     const todayFollowed = await getTodayFollowCount(account.id);
     const remainingToday = Math.max(0, config.dailyFollowLimit - todayFollowed);
     if (remainingToday <= 0) {
-      const msg = `Daily follow limit reached (${todayFollowed}/${config.dailyFollowLimit}) for @${account.username}. Skipping until tomorrow.`;
+      const msg = `Đã đạt giới hạn Follow hôm nay (${todayFollowed}/${config.dailyFollowLimit}) cho @${account.username}.`;
       const log = await appendLog({
         runId,
         trigger,
@@ -189,7 +189,7 @@ export async function runAutoFollowJob(
     );
 
     if (pendingTargets.length === 0) {
-      const msg = "Queue is empty: no pending target users to follow.";
+      const msg = "Hàng đợi trống: Không còn user nào ở trạng thái chờ Follow.";
       const log = await appendLog({
         runId,
         trigger,
@@ -226,7 +226,6 @@ export async function runAutoFollowJob(
 
     let followedCount = 0;
     let failedCount = 0;
-    const isSimulation = Boolean(config.dryRunMode || account.isSimulated);
 
     for (let i = 0; i < batch.length; i++) {
       const target = batch[i];
@@ -235,53 +234,45 @@ export async function runAutoFollowJob(
       try {
         let targetUserId = target.twitterUserId;
 
-        if (!targetUserId) {
-          if (isSimulation) {
-            targetUserId = `sim_uid_${Math.abs(
-              target.username
-                .split("")
-                .reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) | 0, 7)
-            )}`;
-            await updateTarget(target.id, { twitterUserId: targetUserId });
-          } else {
-            const profile = await lookupTwitterUserByUsername(
-              account.accessToken,
-              target.username
-            );
-            targetUserId = profile.id;
-            await updateTarget(target.id, {
-              twitterUserId: profile.id,
-              displayName: profile.name,
-              bio: profile.description,
-              followersCount: profile.public_metrics?.followers_count,
-            });
+        // Resolve username -> userId if missing and using OAuth2 API v2
+        if (!targetUserId && !config.dryRunMode && account.authType !== "cookie") {
+          const profile = await lookupTwitterUserByUsername(
+            account,
+            target.username
+          );
+          targetUserId = profile.id;
+          await updateTarget(target.id, {
+            twitterUserId: profile.id,
+            displayName: profile.name,
+            bio: profile.description,
+            followersCount: profile.public_metrics?.followers_count,
+          });
 
-            if (config.skipProtectedUsers && profile.protected) {
-              await updateTarget(target.id, {
-                status: "skipped",
-                lastError: "Skipped protected account",
-              });
-              const skipLog = await appendLog({
-                runId,
-                trigger,
-                accountId: account.id,
-                accountUsername: account.username,
-                targetId: target.id,
-                targetUsername: target.username,
-                targetTwitterId: targetUserId,
-                action: "follow",
-                status: "skipped",
-                message: `Skipped protected user @${target.username}`,
-                durationMs: Date.now() - startMs,
-              });
-              runLogs.push(skipLog);
-              continue;
-            }
+          if (config.skipProtectedUsers && profile.protected) {
+            await updateTarget(target.id, {
+              status: "skipped",
+              lastError: "Skipped protected account",
+            });
+            const skipLog = await appendLog({
+              runId,
+              trigger,
+              accountId: account.id,
+              accountUsername: account.username,
+              targetId: target.id,
+              targetUsername: target.username,
+              targetTwitterId: targetUserId,
+              action: "follow",
+              status: "skipped",
+              message: `Skipped protected user @${target.username}`,
+              durationMs: Date.now() - startMs,
+            });
+            runLogs.push(skipLog);
+            continue;
           }
         }
 
-        if (isSimulation) {
-          await sleep(randomBetween(180, 450));
+        if (config.dryRunMode) {
+          await sleep(randomBetween(150, 350));
           const durationMs = Date.now() - startMs;
           await updateTarget(target.id, {
             status: "followed",
@@ -302,21 +293,22 @@ export async function runAutoFollowJob(
             targetTwitterId: targetUserId,
             action: "follow",
             status: "dry_run",
-            message: `[Dry-Run / Sandbox] Followed @${target.username} (ID: ${targetUserId}) via POST /2/users/${account.twitterUserId}/following`,
+            message: `[Dry-Run] Followed @${target.username} (${targetUserId || "by handle"})`,
             httpStatus: 200,
             durationMs,
           });
           runLogs.push(log);
         } else {
           const followRes = await executeTwitterFollowRequest({
-            sourceUserId: account.twitterUserId,
-            targetUserId: targetUserId!,
-            accessToken: account.accessToken,
+            account,
+            targetUserId,
+            targetUsername: target.username,
           });
           const durationMs = Date.now() - startMs;
 
           await updateTarget(target.id, {
             status: "followed",
+            twitterUserId: followRes.resolvedUserId || targetUserId,
             attempts: target.attempts + 1,
             followedByAccountId: account.id,
             followedAt: new Date().toISOString(),
@@ -331,12 +323,12 @@ export async function runAutoFollowJob(
             accountUsername: account.username,
             targetId: target.id,
             targetUsername: target.username,
-            targetTwitterId: targetUserId,
+            targetTwitterId: followRes.resolvedUserId || targetUserId,
             action: "follow",
             status: "success",
             message: followRes.pending_follow
-              ? `Sent follow request to @${target.username} (ID: ${targetUserId})`
-              : `Successfully followed @${target.username} (ID: ${targetUserId})`,
+              ? `Đã gửi yêu cầu follow tới @${target.username}`
+              : `Đã follow thành công @${target.username} trên X`,
             httpStatus: followRes.httpStatus,
             durationMs,
           });
@@ -368,7 +360,7 @@ export async function runAutoFollowJob(
           targetTwitterId: target.twitterUserId,
           action: "follow",
           status: "error",
-          message: `Failed to follow @${target.username}: ${errMsg}`,
+          message: `Lỗi khi follow @${target.username}: ${errMsg}`,
           httpStatus,
           durationMs,
         });
@@ -380,8 +372,8 @@ export async function runAutoFollowJob(
       }
 
       if (i < batch.length - 1) {
-        const waitMs = isSimulation
-          ? Math.min(config.delayMinMs, 600)
+        const waitMs = config.dryRunMode
+          ? 250
           : randomBetween(config.delayMinMs, config.delayMaxMs);
         await sleep(waitMs);
       }
@@ -403,7 +395,7 @@ export async function runAutoFollowJob(
         ? "partial"
         : "error";
 
-    const summary = `Processed ${batch.length} target(s) using @${account.username}: ${followedCount} followed, ${failedCount} failed.`;
+    const summary = `Đã xử lý ${batch.length} mục tiêu bằng tài khoản @${account.username}: ${followedCount} thành công, ${failedCount} lỗi.`;
 
     const summaryLog = await appendLog({
       runId,
@@ -414,7 +406,7 @@ export async function runAutoFollowJob(
       status:
         overallStatus === "error"
           ? "error"
-          : isSimulation
+          : config.dryRunMode
           ? "dry_run"
           : "success",
       message: summary,
