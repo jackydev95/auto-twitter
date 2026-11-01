@@ -148,9 +148,15 @@ export default function XAutoFollowStudioPage() {
       if (hydrateForms) {
         setClientId(data.oauthConfig.clientId || "");
         setClientSecret(data.oauthConfig.clientSecret || "");
+        const dynamicCallback =
+          typeof window !== "undefined"
+            ? `${window.location.origin}/api/auth/twitter/callback`
+            : "http://localhost:3000/api/auth/twitter/callback";
         setRedirectUri(
-          data.oauthConfig.redirectUri ||
-            "http://localhost:3000/api/auth/twitter/callback"
+          data.oauthConfig.redirectUri &&
+            !data.oauthConfig.redirectUri.includes("localhost")
+            ? data.oauthConfig.redirectUri
+            : dynamicCallback
         );
         setCronForm(data.cronConfig);
       } else {
@@ -255,26 +261,36 @@ export default function XAutoFollowStudioPage() {
     }
   };
 
-  const handleStartOAuthLogin = async () => {
+  const handleStartOAuthLogin = async (forceInteractive = false) => {
     try {
-      // Save current clientId / redirectUri first
-      await fetch("/api/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "update_oauth_config",
-          clientId,
-          clientSecret,
-          redirectUri,
-        }),
+      const currentCallback =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/api/auth/twitter/callback`
+          : redirectUri;
+
+      if (clientId.trim()) {
+        await fetch("/api/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "update_oauth_config",
+            clientId,
+            clientSecret,
+            redirectUri: currentCallback,
+          }),
+        });
+      }
+
+      const query = new URLSearchParams({
+        mode: "json",
+        return_to: "/",
+        ...(forceInteractive ? { interactive: "1" } : {}),
       });
 
-      const res = await fetch("/api/auth/twitter/login?mode=json");
+      const res = await fetch(`/api/auth/twitter/login?${query.toString()}`);
       const data = await res.json();
       if (!res.ok || !data.authorizationUrl) {
-        throw new Error(
-          data.error || "Vui lòng nhập Twitter OAuth 2.0 Client ID trước."
-        );
+        throw new Error(data.error || "Không thể khởi tạo OAuth 2.0");
       }
       window.location.href = data.authorizationUrl;
     } catch (err) {
@@ -604,6 +620,15 @@ export default function XAutoFollowStudioPage() {
               </span>
             </button>
 
+            {/* 1-Click Connect X OAuth Button */}
+            <button
+              onClick={() => handleStartOAuthLogin(false)}
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-3.5 py-1.5 text-xs font-bold text-slate-950 shadow-sm hover:bg-slate-200 transition cursor-pointer"
+            >
+              <span className="font-black text-sm leading-none">𝕏</span>
+              <span>Authen Kết nối X</span>
+            </button>
+
             {/* Admin Dashboard Link */}
             <Link
               href="/admin"
@@ -918,21 +943,21 @@ export default function XAutoFollowStudioPage() {
 
                   <div className="flex flex-wrap items-center gap-2.5 pt-1">
                     <button
+                      type="button"
+                      onClick={() => handleStartOAuthLogin(false)}
+                      className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-slate-200 transition cursor-pointer shadow-sm"
+                    >
+                      <span className="font-black text-sm leading-none">𝕏</span>
+                      <span>Bấm Authen Kết nối X & Lấy Token Ngay</span>
+                    </button>
+
+                    <button
                       type="submit"
                       disabled={savingConfig}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 cursor-pointer"
                     >
                       <Save className="h-3.5 w-3.5" />
                       <span>Lưu Client Config</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleStartOAuthLogin}
-                      className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400 transition cursor-pointer"
-                    >
-                      <KeyRound className="h-3.5 w-3.5" />
-                      <span>Đăng nhập X & Lấy Token Ngay</span>
                     </button>
                   </div>
                 </form>

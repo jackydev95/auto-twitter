@@ -10,8 +10,10 @@ import {
 } from "@/lib/store";
 import { saveRuntimeRedisConfig } from "@/lib/redis";
 import { syncServerCronScheduler } from "@/lib/cron-runner";
+import { syncCookieAccountsIntoStore } from "@/lib/cookie-sync";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  await syncCookieAccountsIntoStore(req);
   const [db, activeAccount, scheduler, storage] = await Promise.all([
     readDb(),
     getActiveAccount(),

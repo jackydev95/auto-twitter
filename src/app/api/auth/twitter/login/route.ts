@@ -1,16 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createOAuthAuthorizationUrl } from "@/lib/twitter-api";
 
+export const PKCE_COOKIE_NAME = "x_oauth_pkce_session";
+
 export async function GET(req: NextRequest) {
   try {
     const mode = req.nextUrl.searchParams.get("mode");
-    const { authorizationUrl, state } = await createOAuthAuthorizationUrl();
+    const forceInteractive =
+      req.nextUrl.searchParams.get("interactive") === "1";
+    const returnTo = req.nextUrl.searchParams.get("return_to") || "/";
+
+    const {
+      authorizationUrl,
+      state,
+      codeVerifier,
+      redirectUri,
+      isInteractivePortal,
+    } = await createOAuthAuthorizationUrl({
+      origin: req.nextUrl.origin,
+      forceInteractivePortal: forceInteractive,
+      returnTo,
+    });
+
+    const cookiePayload = Buffer.from(
+      JSON.stringify({ state, codeVerifier, redirectUri, returnTo }),
+      "utf-8"
+    ).toString("base64");
 
     if (mode === "json") {
-      return NextResponse.json({ authorizationUrl, state });
+      const res = NextResponse.json({
+        authorizationUrl,
+        state,
+        isInteractivePortal,
+      });
+      res.cookies.set(PKCE_COOKIE_NAME, cookiePayload, {
+        path: "/",
+        httpOnly: true,
+        maxAge: 900,
+        sameSite: "lax",
+      });
+      return res;
     }
 
-    return NextResponse.redirect(authorizationUrl);
+    const res = NextResponse.redirect(authorizationUrl);
+    res.cookies.set(PKCE_COOKIE_NAME, cookiePayload, {
+      path: "/",
+      httpOnly: true,
+      maxAge: 900,
+      sameSite: "lax",
+    });
+    return res;
   } catch (err) {
     const msg =
       err instanceof Error
@@ -28,10 +67,41 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { authorizationUrl, state } = await createOAuthAuthorizationUrl(
-      body.redirectUri
-    );
-    return NextResponse.json({ authorizationUrl, state });
+    const {
+      authorizationUrl,
+      state,
+      codeVerifier,
+      redirectUri,
+      isInteractivePortal,
+    } = await createOAuthAuthorizationUrl({
+      customRedirectUri: body.redirectUri,
+      origin: req.nextUrl.origin,
+      forceInteractivePortal: Boolean(body.forceInteractivePortal),
+      returnTo: body.returnTo || "/",
+    });
+
+    const cookiePayload = Buffer.from(
+      JSON.stringify({
+        state,
+        codeVerifier,
+        redirectUri,
+        returnTo: body.returnTo || "/",
+      }),
+      "utf-8"
+    ).toString("base64");
+
+    const res = NextResponse.json({
+      authorizationUrl,
+      state,
+      isInteractivePortal,
+    });
+    res.cookies.set(PKCE_COOKIE_NAME, cookiePayload, {
+      path: "/",
+      httpOnly: true,
+      maxAge: 900,
+      sameSite: "lax",
+    });
+    return res;
   } catch (err) {
     return NextResponse.json(
       {

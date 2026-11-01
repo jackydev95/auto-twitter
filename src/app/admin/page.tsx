@@ -219,9 +219,26 @@ export default function AdminifyUsersAndTokensPage() {
 
   useEffect(() => {
     fetchAdminData(true);
+
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const authSuccess = params.get("auth_success");
+      const authError = params.get("auth_error");
+      if (authSuccess) {
+        notify(
+          "success",
+          `Đã kết nối X OAuth 2.0 và lưu Token thành công cho @${authSuccess}!`
+        );
+        window.history.replaceState({}, "", "/admin");
+      } else if (authError) {
+        notify("error", `Lỗi xác thực X OAuth 2.0: ${authError}`);
+        window.history.replaceState({}, "", "/admin");
+      }
+    }
+
     const timer = setInterval(() => fetchAdminData(false), 8000);
     return () => clearInterval(timer);
-  }, [fetchAdminData]);
+  }, [fetchAdminData, notify]);
 
   // Filtered users list
   const filteredUsers = useMemo(() => {
@@ -635,6 +652,14 @@ export default function AdminifyUsersAndTokensPage() {
                   : "Vercel Redis: Chưa cấu hình URL"}
               </span>
             </button>
+
+            <a
+              href="/api/auth/twitter/login?return_to=/admin"
+              className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-slate-800 transition"
+            >
+              <span className="font-black text-sm leading-none">𝕏</span>
+              <span>Authen Kết nối X</span>
+            </a>
 
             <button
               onClick={openCreateUserModal}
@@ -1136,6 +1161,14 @@ export default function AdminifyUsersAndTokensPage() {
                       {f.label}
                     </button>
                   ))}
+
+                  <a
+                    href="/api/auth/twitter/login?return_to=/admin"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[#ef1c1c] px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700"
+                  >
+                    <span className="font-black">𝕏</span>
+                    <span>Authen Kết nối X</span>
+                  </a>
 
                   <button
                     onClick={openCreateUserModal}

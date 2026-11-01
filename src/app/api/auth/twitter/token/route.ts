@@ -12,9 +12,14 @@ import {
   fetchTwitterMe,
   refreshAccountAccessToken,
 } from "@/lib/twitter-api";
+import {
+  syncCookieAccountsIntoStore,
+  writeAccountToCookie,
+} from "@/lib/cookie-sync";
 
 export async function POST(req: NextRequest) {
   try {
+    await syncCookieAccountsIntoStore(req);
     const body = await req.json();
     const { action } = body;
 
@@ -115,7 +120,9 @@ export async function POST(req: NextRequest) {
         httpStatus: 200,
       });
 
-      return NextResponse.json({ ok: true, account: saved });
+      const res = NextResponse.json({ ok: true, account: saved });
+      writeAccountToCookie(req, res, saved);
+      return res;
     }
 
     if (action === "update_user") {
@@ -211,7 +218,9 @@ export async function POST(req: NextRequest) {
         httpStatus: 200,
       });
 
-      return NextResponse.json({ ok: true, account: saved });
+      const res = NextResponse.json({ ok: true, account: saved });
+      writeAccountToCookie(req, res, saved);
+      return res;
     }
 
     if (action === "refresh_token") {

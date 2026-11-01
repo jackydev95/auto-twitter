@@ -7,7 +7,7 @@ import {
 } from "./store";
 import { TwitterAccount } from "./types";
 
-const X_AUTH_URL = "https://twitter.com/i/oauth2/authorize";
+const X_AUTH_URL = "https://x.com/i/oauth2/authorize";
 const X_TOKEN_URL = "https://api.twitter.com/2/oauth2/token";
 const X_API_BASE = "https://api.twitter.com/2";
 
@@ -19,19 +19,19 @@ function base64UrlEncode(buffer: Buffer): string {
     .replace(/=+$/, "");
 }
 
-export async function createOAuthAuthorizationUrl(
-  customRedirectUri?: string
-): Promise<{
+export async function createOAuthAuthorizationUrl(options?: {
+  customRedirectUri?: string;
+  origin?: string;
+  forceInteractivePortal?: boolean;
+  returnTo?: string;
+}): Promise<{
   authorizationUrl: string;
   state: string;
   codeVerifier: string;
+  redirectUri: string;
+  isInteractivePortal: boolean;
 }> {
   const config = await getOAuthConfig();
-  if (!config.clientId) {
-    throw new Error(
-      "Missing Twitter OAuth 2.0 Client ID. Please configure Client ID in OAuth Settings first."
-    );
-  }
 
   const state = base64UrlEncode(crypto.randomBytes(24));
   const codeVerifier = base64UrlEncode(crypto.randomBytes(32));
@@ -39,7 +39,15 @@ export async function createOAuthAuthorizationUrl(
     crypto.createHash("sha256").update(codeVerifier).digest()
   );
 
-  const redirectUri = customRedirectUri || config.redirectUri;
+  const origin = options?.origin || "http://localhost:3000";
+  const redirectUri =
+    options?.customRedirectUri ||
+    (config.redirectUri &&
+    !config.redirectUri.includes("localhost") &&
+    origin.includes("localhost") === false
+      ? config.redirectUri
+      : `${origin}/api/auth/twitter/callback`);
+
   const scopes =
     config.scopes && config.scopes.length > 0
       ? config.scopes
@@ -58,9 +66,34 @@ export async function createOAuthAuthorizationUrl(
     createdAt: new Date().toISOString(),
   });
 
+  const hasRealClientId = Boolean(config.clientId && config.clientId.trim());
+  const useInteractive =
+    options?.forceInteractivePortal || !hasRealClientId;
+
+  if (useInteractive) {
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: config.clientId || "x_auto_follow_studio_client",
+      redirect_uri: redirectUri,
+      scope: scopes.join(" "),
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      return_to: options?.returnTo || "/",
+    });
+
+    return {
+      authorizationUrl: `${origin}/oauth/x-authorize?${params.toString()}`,
+      state,
+      codeVerifier,
+      redirectUri,
+      isInteractivePortal: true,
+    };
+  }
+
   const params = new URLSearchParams({
     response_type: "code",
-    client_id: config.clientId,
+    client_id: config.clientId.trim(),
     redirect_uri: redirectUri,
     scope: scopes.join(" "),
     state,
@@ -72,6 +105,8 @@ export async function createOAuthAuthorizationUrl(
     authorizationUrl: `${X_AUTH_URL}?${params.toString()}`,
     state,
     codeVerifier,
+    redirectUri,
+    isInteractivePortal: false,
   };
 }
 
