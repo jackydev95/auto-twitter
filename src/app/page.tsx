@@ -110,17 +110,24 @@ export default function XAutoFollowStudioPage() {
 
   // Cron form state
   const [cronForm, setCronForm] = useState<CronJobConfig>({
-    enabled: false,
-    cronExpression: "*/15 * * * *",
+    enabled: true,
+    cronExpression: "*/5 * * * *",
     maxFollowsPerRun: 3,
     dailyFollowLimit: 40,
     delayMinMs: 1200,
-    delayMaxMs: 3000,
+    delayMaxMs: 2800,
     autoRefreshToken: true,
     skipProtectedUsers: true,
     dryRunMode: false,
     cronSecret: "x-auto-follow-secret-2026",
   });
+
+  // Live Auto-Call Follow API Worker state
+  const [autoCallIntervalSec, setAutoCallIntervalSec] = useState<number>(30);
+  const [autoCountdown, setAutoCountdown] = useState<number>(30);
+  const [followingTargetId, setFollowingTargetId] = useState<string | null>(
+    null
+  );
 
   // Target queue state
   const [bulkUsernames, setBulkUsernames] = useState("");
@@ -340,9 +347,12 @@ export default function XAutoFollowStudioPage() {
       setManualUsername("");
       setManualUserId("");
       await fetchState(false);
+      const autoSummary = data.autoFollow?.summary
+        ? ` | Tự gọi API Follow: ${data.autoFollow.summary}`
+        : "";
       showNotice(
         "success",
-        `Đã xác thực thật và lưu vào Vercel Redis cho tài khoản @${data.account.username} (ID: ${data.account.twitterUserId})!`
+        `Đã xác thực thật và lưu vào Vercel Redis cho tài khoản @${data.account.username} (ID: ${data.account.twitterUserId})${autoSummary}`
       );
     } catch (err) {
       showNotice(
@@ -428,28 +438,84 @@ export default function XAutoFollowStudioPage() {
     }
   };
 
-  const handleRunCronNow = async () => {
-    setRunningJob(true);
+  const handleRunCronNow = useCallback(
+    async (isAutoInterval = false) => {
+      if (runningJob) return;
+      setRunningJob(true);
+      try {
+        const res = await fetch("/api/cron/auto-follow", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trigger: isAutoInterval ? "auto_interval" : "manual",
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Chạy Cron Job thất bại");
+        await fetchState(false);
+        if (!isAutoInterval || data.followedCount > 0 || data.status === "error") {
+          showNotice(
+            data.status === "error" ? "error" : "success",
+            data.summary || "Đã tự động gọi API Follow hoàn tất!"
+          );
+        }
+      } catch (err) {
+        if (!isAutoInterval) {
+          showNotice(
+            "error",
+            err instanceof Error ? err.message : "Lỗi khi gọi API Follow"
+          );
+        }
+      } finally {
+        setRunningJob(false);
+        setAutoCountdown(autoCallIntervalSec);
+      }
+    },
+    [runningJob, fetchState, showNotice, autoCallIntervalSec]
+  );
+
+  // Automatic client-side Follow API caller interval when Cron is enabled
+  useEffect(() => {
+    if (!cronForm.enabled || accounts.length === 0) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setAutoCountdown((prev) => {
+        if (prev <= 1) {
+          void handleRunCronNow(true);
+          return autoCallIntervalSec;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cronForm.enabled, accounts.length, autoCallIntervalSec, handleRunCronNow]);
+
+  const handleFollowSingleTarget = async (
+    targetId: string,
+    username: string
+  ) => {
+    setFollowingTargetId(targetId);
     try {
       const res = await fetch("/api/cron/auto-follow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trigger: "manual" }),
+        body: JSON.stringify({ trigger: "manual", targetId }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Chạy Cron Job thất bại");
+      if (!res.ok) throw new Error(data.error || "Lỗi gọi API Follow");
       await fetchState(false);
       showNotice(
         data.status === "error" ? "error" : "success",
-        data.summary || "Đã hoàn tất chạy Cron Job!"
+        data.summary || `Đã gọi API Follow @${username}!`
       );
     } catch (err) {
       showNotice(
         "error",
-        err instanceof Error ? err.message : "Lỗi khi chạy Cron Job"
+        err instanceof Error ? err.message : "Lỗi gọi API Follow"
       );
     } finally {
-      setRunningJob(false);
+      setFollowingTargetId(null);
     }
   };
 
@@ -471,9 +537,13 @@ export default function XAutoFollowStudioPage() {
       if (!res.ok) throw new Error(data.error);
       setBulkUsernames("");
       setTargets(data.targets);
+      await fetchState(false);
+      const autoMsg = data.autoFollow?.summary
+        ? ` | ${data.autoFollow.summary}`
+        : "";
       showNotice(
         "success",
-        `Đã thêm ${data.added} user vào hàng đợi Follow (${data.skippedDuplicates} trùng lặp đã bỏ qua).`
+        `Đã thêm ${data.added} user vào hàng đợi Follow (${data.skippedDuplicates} trùng lặp đã bỏ qua)${autoMsg}`
       );
     } catch (err) {
       showNotice(
@@ -503,9 +573,13 @@ export default function XAutoFollowStudioPage() {
       if (!res.ok) throw new Error(data.error);
       setDiscoverSourceHandle("");
       setTargets(data.targets);
+      await fetchState(false);
+      const autoMsg = data.autoFollow?.summary
+        ? ` | ${data.autoFollow.summary}`
+        : "";
       showNotice(
         "success",
-        `Đã quét và thêm ${data.added} followers vào danh sách chờ Follow!`
+        `Đã quét và thêm ${data.added} followers vào danh sách chờ Follow!${autoMsg}`
       );
     } catch (err) {
       showNotice(
@@ -586,25 +660,37 @@ export default function XAutoFollowStudioPage() {
               )}
             </div>
 
-            {/* Cron Status Pill */}
-            <button
-              onClick={() => {
-                setActiveTab("cron");
-              }}
-              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                schedulerStatus.active
-                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                  : "border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <Clock className="h-3.5 w-3.5" />
-              <span>
-                Cron:{" "}
-                {schedulerStatus.active
-                  ? `Đang bật (${schedulerStatus.cronExpression})`
-                  : "Tạm dừng"}
-              </span>
-            </button>
+            {/* Cron & Auto-Call API Status Pill */}
+            <div className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-300">
+              <Zap className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
+              <button
+                onClick={() => setActiveTab("cron")}
+                className="cursor-pointer hover:underline"
+              >
+                {cronForm.enabled
+                  ? accounts.length > 0
+                    ? `Tự gọi API Follow: ${autoCountdown}s`
+                    : `Auto-Follow BẬT (Chờ kết nối Token)`
+                  : "Auto-Follow: Tạm dừng"}
+              </button>
+              {cronForm.enabled && (
+                <select
+                  value={autoCallIntervalSec}
+                  onChange={(e) => {
+                    const sec = Number(e.target.value) || 30;
+                    setAutoCallIntervalSec(sec);
+                    setAutoCountdown(sec);
+                  }}
+                  className="ml-1 rounded bg-slate-900/90 border border-emerald-500/30 px-1.5 py-0.5 text-[11px] text-emerald-200 focus:outline-none"
+                  title="Chu kỳ tự động gọi API Follow"
+                >
+                  <option value={15}>15s/lần</option>
+                  <option value={30}>30s/lần</option>
+                  <option value={60}>60s/lần</option>
+                  <option value={300}>5p/lần</option>
+                </select>
+              )}
+            </div>
 
             {/* 1-Click Connect X OAuth Button */}
             <button
@@ -626,7 +712,7 @@ export default function XAutoFollowStudioPage() {
 
             {/* Run Now CTA */}
             <button
-              onClick={handleRunCronNow}
+              onClick={() => handleRunCronNow(false)}
               disabled={runningJob}
               className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-3.5 py-1.5 text-xs font-semibold text-slate-950 shadow-sm hover:bg-sky-400 disabled:opacity-50 transition cursor-pointer"
             >
@@ -635,7 +721,7 @@ export default function XAutoFollowStudioPage() {
               ) : (
                 <Play className="h-3.5 w-3.5 fill-current" />
               )}
-              <span>Chạy Cron Follow Ngay</span>
+              <span>Gọi API Follow Ngay</span>
             </button>
           </div>
         </div>
@@ -1545,16 +1631,38 @@ export default function XAutoFollowStudioPage() {
                               )}
                         </td>
                         <td className="py-3 px-3 text-right">
-                          <button
-                            onClick={() =>
-                              handleTargetAction("delete", {
-                                targetId: item.id,
-                              })
-                            }
-                            className="rounded p-1 text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="inline-flex items-center gap-1.5">
+                            {item.status !== "followed" && (
+                              <button
+                                onClick={() =>
+                                  handleFollowSingleTarget(
+                                    item.id,
+                                    item.username
+                                  )
+                                }
+                                disabled={followingTargetId === item.id}
+                                className="inline-flex items-center gap-1 rounded-md bg-sky-500/20 border border-sky-500/40 px-2.5 py-1 text-[11px] font-semibold text-sky-300 hover:bg-sky-500/30 disabled:opacity-50 cursor-pointer"
+                                title="Gọi API Follow trực tiếp user này ngay"
+                              >
+                                {followingTargetId === item.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Play className="h-3 w-3 fill-current" />
+                                )}
+                                <span>Gọi API Follow</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={() =>
+                                handleTargetAction("delete", {
+                                  targetId: item.id,
+                                })
+                              }
+                              className="rounded p-1 text-slate-400 hover:bg-rose-500/15 hover:text-rose-300 cursor-pointer"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1796,12 +1904,12 @@ export default function XAutoFollowStudioPage() {
 
                 <button
                   type="button"
-                  onClick={handleRunCronNow}
+                  onClick={() => handleRunCronNow(false)}
                   disabled={runningJob}
                   className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 cursor-pointer"
                 >
                   <Play className="h-4 w-4" />
-                  <span>Test Chạy Cron Ngay Lập Tức</span>
+                  <span>Gọi API Follow Ngay Lập Tức</span>
                 </button>
               </div>
             </div>

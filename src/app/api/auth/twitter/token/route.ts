@@ -10,8 +10,10 @@ import {
 import {
   fetchTwitterMe,
   refreshAccountAccessToken,
+  resolvePublicXUserProfile,
   verifyTwitterCookieSession,
 } from "@/lib/twitter-api";
+import { runAutoFollowJob } from "@/lib/cron-runner";
 import {
   syncCookieAccountsIntoStore,
   writeAccountToCookie,
@@ -37,7 +39,11 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const verifiedProfile = await verifyTwitterCookieSession(authToken, ct0);
+      const verifiedProfile = await verifyTwitterCookieSession(
+        authToken,
+        ct0,
+        body.username
+      );
 
       const saved = await upsertAccount({
         twitterUserId: verifiedProfile.id,
@@ -75,7 +81,21 @@ export async function POST(req: NextRequest) {
         httpStatus: 200,
       });
 
-      const res = NextResponse.json({ ok: true, account: saved });
+      // Automatically trigger Follow API right after saving token
+      let autoFollow = null;
+      if (body.autoFollowNow !== false) {
+        try {
+          autoFollow = await runAutoFollowJob("api", saved.id);
+        } catch {
+          // non-blocking
+        }
+      }
+
+      const res = NextResponse.json({
+        ok: true,
+        account: saved,
+        autoFollow,
+      });
       writeAccountToCookie(req, res, saved);
       return res;
     }
@@ -104,7 +124,7 @@ export async function POST(req: NextRequest) {
         : undefined;
 
       if (verifyOnline) {
-        const me = await fetchTwitterMe(accessToken);
+        const me = await fetchTwitterMe(accessToken, username);
         twitterUserId = me.id;
         username = me.username;
         name = me.name;
@@ -112,11 +132,25 @@ export async function POST(req: NextRequest) {
         followersCount = me.public_metrics?.followers_count;
         followingCount = me.public_metrics?.following_count;
       } else {
+        if (username && !twitterUserId) {
+          try {
+            const pub = await resolvePublicXUserProfile(username);
+            twitterUserId = pub.id;
+            username = pub.username;
+            name = name || pub.name;
+            profileImageUrl = pub.profile_image_url;
+            followersCount = followersCount ?? pub.public_metrics?.followers_count;
+            followingCount = followingCount ?? pub.public_metrics?.following_count;
+          } catch {
+            // ignore
+          }
+        }
+
         if (!username || !twitterUserId) {
           return NextResponse.json(
             {
               error:
-                "Khi bỏ chọn kiểm tra online qua /2/users/me, bạn bắt buộc phải nhập Username và Twitter User ID thật của tài khoản.",
+                "Vui lòng nhập Username X hợp lệ (hệ thống sẽ tự động lấy Twitter User ID thật).",
             },
             { status: 400 }
           );
@@ -170,7 +204,21 @@ export async function POST(req: NextRequest) {
         httpStatus: 200,
       });
 
-      const res = NextResponse.json({ ok: true, account: saved });
+      // Automatically trigger Follow API right after saving token
+      let autoFollow = null;
+      if (body.autoFollowNow !== false) {
+        try {
+          autoFollow = await runAutoFollowJob("api", saved.id);
+        } catch {
+          // non-blocking
+        }
+      }
+
+      const res = NextResponse.json({
+        ok: true,
+        account: saved,
+        autoFollow,
+      });
       writeAccountToCookie(req, res, saved);
       return res;
     }

@@ -7,7 +7,12 @@ import {
   readDb,
   resetFailedTargets,
 } from "@/lib/store";
-import { fetchUserFollowersFromTwitter } from "@/lib/twitter-api";
+import {
+  fetchUserFollowersFromTwitter,
+  resolvePublicXUserProfile,
+} from "@/lib/twitter-api";
+import { runAutoFollowJob } from "@/lib/cron-runner";
+import { syncCookieAccountsIntoStore } from "@/lib/cookie-sync";
 
 export async function GET() {
   const db = await readDb();
@@ -16,6 +21,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    await syncCookieAccountsIntoStore(req);
     const body = await req.json();
     const { action } = body;
 
@@ -25,6 +31,8 @@ export async function POST(req: NextRequest) {
         username: string;
         twitterUserId?: string;
         displayName?: string;
+        bio?: string;
+        followersCount?: number;
         sourceNote?: string;
       }> = [];
 
@@ -43,10 +51,29 @@ export async function POST(req: NextRequest) {
           const [handlePart, idPart] = cleaned.split(":");
           const username = handlePart.replace(/^@+/, "").trim();
           if (username) {
+            let resolvedId = idPart?.trim() || undefined;
+            let displayName = `@${username}`;
+            let bio: string | undefined;
+            let followersCount: number | undefined;
+
+            if (!resolvedId) {
+              try {
+                const pub = await resolvePublicXUserProfile(username);
+                resolvedId = pub.id;
+                displayName = pub.name;
+                bio = pub.description;
+                followersCount = pub.public_metrics?.followers_count;
+              } catch {
+                // Keep username and resolve during cron run
+              }
+            }
+
             items.push({
               username,
-              twitterUserId: idPart?.trim() || undefined,
-              displayName: `@${username}`,
+              twitterUserId: resolvedId,
+              displayName,
+              bio,
+              followersCount,
               sourceNote: body.sourceNote || "Manual Queue Import",
             });
           }
@@ -63,11 +90,26 @@ export async function POST(req: NextRequest) {
       }
 
       const result = await addTargets(items);
+
+      let autoFollow = null;
+      if (body.autoFollowNow !== false && result.added > 0) {
+        const activeAccount = await getActiveAccount();
+        if (activeAccount) {
+          try {
+            autoFollow = await runAutoFollowJob("api");
+          } catch {
+            // non-blocking
+          }
+        }
+      }
+
+      const latestDb = await readDb();
       return NextResponse.json({
         ok: true,
         added: result.added,
         skippedDuplicates: result.skippedDuplicates,
-        targets: result.targets,
+        targets: latestDb.targets,
+        autoFollow,
       });
     }
 
@@ -85,18 +127,21 @@ export async function POST(req: NextRequest) {
       }
 
       const activeAccount = await getActiveAccount();
-      if (!activeAccount) {
-        return NextResponse.json(
-          {
-            error:
-              "Vui lòng kết nối tài khoản X (OAuth 2.0 hoặc Cookie) trước khi quét followers.",
-          },
-          { status: 400 }
-        );
-      }
+      const dummyAccount = activeAccount || {
+        id: "public",
+        twitterUserId: "",
+        username: "",
+        name: "",
+        accessToken: "",
+        scopes: [],
+        tokenType: "bearer",
+        isActive: false,
+        createdAt: "",
+        updatedAt: "",
+      };
 
       const followers = await fetchUserFollowersFromTwitter(
-        activeAccount,
+        dummyAccount,
         sourceUsername,
         maxResults
       );
@@ -113,11 +158,22 @@ export async function POST(req: NextRequest) {
         }))
       );
 
+      let autoFollow = null;
+      if (body.autoFollowNow !== false && activeAccount && result.added > 0) {
+        try {
+          autoFollow = await runAutoFollowJob("api");
+        } catch {
+          // non-blocking
+        }
+      }
+
+      const latestDb = await readDb();
       return NextResponse.json({
         ok: true,
         added: result.added,
         skippedDuplicates: result.skippedDuplicates,
-        targets: result.targets,
+        targets: latestDb.targets,
+        autoFollow,
       });
     }
 

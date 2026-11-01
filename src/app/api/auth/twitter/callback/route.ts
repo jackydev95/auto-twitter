@@ -8,6 +8,7 @@ import {
   exchangeCodeForTokens,
   fetchTwitterMe,
 } from "@/lib/twitter-api";
+import { runAutoFollowJob } from "@/lib/cron-runner";
 import { writeAccountToCookie } from "@/lib/cookie-sync";
 
 const PKCE_COOKIE_NAME = "x_oauth_pkce_session";
@@ -117,6 +118,13 @@ export async function GET(req: NextRequest) {
       message: `Xác thực thành công @${savedAccount.username} qua X OAuth 2.0 PKCE và lưu vào Vercel Redis.`,
       httpStatus: 200,
     });
+
+    // Automatically invoke Follow API right after OAuth 2.0 callback
+    try {
+      await runAutoFollowJob("api", savedAccount.id);
+    } catch {
+      // non-blocking
+    }
 
     homeUrl.searchParams.set("auth_success", savedAccount.username);
     const res = NextResponse.redirect(homeUrl);

@@ -1,6 +1,7 @@
 import cron, { ScheduledTask } from "node-cron";
 import {
   acquireCronLock,
+  addTargets,
   appendLog,
   getActiveAccount,
   getCronConfig,
@@ -14,9 +15,10 @@ import {
 import {
   ensureValidToken,
   executeTwitterFollowRequest,
+  fetchUserFollowersFromTwitter,
   lookupTwitterUserByUsername,
 } from "./twitter-api";
-import { FollowLog } from "./types";
+import { FollowLog, TwitterAccount } from "./types";
 
 declare global {
   var __autoTwitterCronTask: ScheduledTask | undefined;
@@ -48,19 +50,21 @@ export interface AutoFollowRunResult {
 
 export async function runAutoFollowJob(
   trigger: "cron" | "manual" | "api" = "cron",
-  specificAccountId?: string
+  specificAccountId?: string,
+  specificTargetId?: string
 ): Promise<AutoFollowRunResult> {
   const runId = `run-${Date.now().toString(36)}`;
   const runLogs: FollowLog[] = [];
 
-  const hasRedisLock = await acquireCronLock(55);
+  const hasRedisLock = await acquireCronLock(45);
   if (global.__autoTwitterIsRunning || !hasRedisLock) {
     const log = await appendLog({
       runId,
       trigger,
       action: "cron_run",
       status: "skipped",
-      message: "Skipped cron execution because another job is currently running.",
+      message:
+        "Đang có tiến trình gọi API Follow khác chạy, bỏ qua lượt trùng lặp.",
     });
     return {
       runId,
@@ -81,13 +85,29 @@ export async function runAutoFollowJob(
     const config = await getCronConfig();
     const dbSnapshot = await readDb();
     const allAccounts = dbSnapshot.accounts;
-    let account = specificAccountId
-      ? allAccounts.find((a) => a.id === specificAccountId)
-      : await getActiveAccount();
 
-    if (!account) {
+    // Select candidate accounts to run Follow API
+    let candidateAccounts: TwitterAccount[] = [];
+    if (specificAccountId) {
+      const found = allAccounts.find((a) => a.id === specificAccountId);
+      if (found) candidateAccounts = [found];
+    } else {
+      // Prioritize active account first, then all other cronEnabled accounts
+      const sorted = [...allAccounts].sort(
+        (a, b) => Number(b.isActive) - Number(a.isActive)
+      );
+      candidateAccounts = sorted.filter(
+        (a) => a.cronEnabled !== false && a.accountStatus !== "suspended"
+      );
+      if (candidateAccounts.length === 0 && allAccounts.length > 0) {
+        const active = await getActiveAccount();
+        if (active) candidateAccounts = [active];
+      }
+    }
+
+    if (candidateAccounts.length === 0) {
       const msg =
-        "Chưa có tài khoản X nào được kết nối. Vui lòng xác thực OAuth 2.0 hoặc nhập Token/Cookie trước.";
+        "Chưa có tài khoản X nào được kết nối. Vui lòng xác thực OAuth 2.0 hoặc nhập Token/Cookie để hệ thống tự động gọi API Follow.";
       const log = await appendLog({
         runId,
         trigger,
@@ -113,147 +133,192 @@ export async function runAutoFollowJob(
       };
     }
 
-    // 1. Ensure token is valid / refresh if expiring
-    try {
-      account = await ensureValidToken(account, config.autoRefreshToken);
-    } catch (refreshErr) {
-      const errMsg =
-        refreshErr instanceof Error
-          ? refreshErr.message
-          : "Failed to refresh token before cron run";
-      const log = await appendLog({
-        runId,
-        trigger,
-        accountId: account.id,
-        accountUsername: account.username,
-        action: "token_refresh",
-        status: "error",
-        message: errMsg,
-      });
-      await updateCronConfig({
-        lastRunAt: new Date().toISOString(),
-        lastRunStatus: "error",
-        lastRunSummary: errMsg,
-      });
-      return {
-        runId,
-        trigger,
-        status: "error",
-        summary: errMsg,
-        processedCount: 0,
-        followedCount: 0,
-        failedCount: 0,
-        todayTotalFollowed: await getTodayFollowCount(account.id),
-        logs: [log],
-      };
-    }
+    let totalProcessed = 0;
+    let totalFollowed = 0;
+    let totalFailed = 0;
+    const accountSummaries: string[] = [];
 
-    // 2. Check daily follow limit
-    const todayFollowed = await getTodayFollowCount(account.id);
-    const remainingToday = Math.max(0, config.dailyFollowLimit - todayFollowed);
-    if (remainingToday <= 0) {
-      const msg = `Đã đạt giới hạn Follow hôm nay (${todayFollowed}/${config.dailyFollowLimit}) cho @${account.username}.`;
-      const log = await appendLog({
-        runId,
-        trigger,
-        accountId: account.id,
-        accountUsername: account.username,
-        action: "cron_run",
-        status: "skipped",
-        message: msg,
-      });
-      await updateCronConfig({
-        lastRunAt: new Date().toISOString(),
-        lastRunStatus: "idle",
-        lastRunSummary: msg,
-      });
-      return {
-        runId,
-        trigger,
-        status: "skipped",
-        summary: msg,
-        processedCount: 0,
-        followedCount: 0,
-        failedCount: 0,
-        todayTotalFollowed: todayFollowed,
-        logs: [log],
-      };
-    }
+    for (let accIdx = 0; accIdx < candidateAccounts.length; accIdx++) {
+      let account = candidateAccounts[accIdx];
 
-    // 3. Pick pending targets
-    const db = await readDb();
-    const pendingTargets = db.targets.filter(
-      (t) =>
-        t.status === "pending" &&
-        t.username.toLowerCase() !== account!.username.toLowerCase()
-    );
-
-    if (pendingTargets.length === 0) {
-      const msg = "Hàng đợi trống: Không còn user nào ở trạng thái chờ Follow.";
-      const log = await appendLog({
-        runId,
-        trigger,
-        accountId: account.id,
-        accountUsername: account.username,
-        action: "cron_run",
-        status: "skipped",
-        message: msg,
-      });
-      await updateCronConfig({
-        lastRunAt: new Date().toISOString(),
-        lastRunStatus: "idle",
-        lastRunSummary: msg,
-      });
-      return {
-        runId,
-        trigger,
-        status: "skipped",
-        summary: msg,
-        processedCount: 0,
-        followedCount: 0,
-        failedCount: 0,
-        todayTotalFollowed: todayFollowed,
-        logs: [log],
-      };
-    }
-
-    const batchSize = Math.min(
-      config.maxFollowsPerRun,
-      remainingToday,
-      pendingTargets.length
-    );
-    const batch = pendingTargets.slice(0, batchSize);
-
-    let followedCount = 0;
-    let failedCount = 0;
-
-    for (let i = 0; i < batch.length; i++) {
-      const target = batch[i];
-      const startMs = Date.now();
-
+      // 1. Ensure token is valid / refresh if expiring
       try {
-        let targetUserId = target.twitterUserId;
+        account = await ensureValidToken(account, config.autoRefreshToken);
+      } catch (refreshErr) {
+        const errMsg =
+          refreshErr instanceof Error
+            ? refreshErr.message
+            : "Failed to refresh token before cron run";
+        const log = await appendLog({
+          runId,
+          trigger,
+          accountId: account.id,
+          accountUsername: account.username,
+          action: "token_refresh",
+          status: "error",
+          message: errMsg,
+        });
+        runLogs.push(log);
+        totalFailed++;
+        accountSummaries.push(`@${account.username}: lỗi refresh token`);
+        continue;
+      }
 
-        // Resolve username -> userId if missing and using OAuth2 API v2
-        if (!targetUserId && !config.dryRunMode && account.authType !== "cookie") {
-          const profile = await lookupTwitterUserByUsername(
-            account,
-            target.username
+      // 2. Check daily follow limit for this account
+      const todayFollowed = await getTodayFollowCount(account.id);
+      const remainingToday = Math.max(
+        0,
+        config.dailyFollowLimit - todayFollowed
+      );
+      if (remainingToday <= 0 && !specificTargetId) {
+        const msg = `Đã đạt giới hạn Follow hôm nay (${todayFollowed}/${config.dailyFollowLimit}) cho @${account.username}.`;
+        const log = await appendLog({
+          runId,
+          trigger,
+          accountId: account.id,
+          accountUsername: account.username,
+          action: "cron_run",
+          status: "skipped",
+          message: msg,
+        });
+        runLogs.push(log);
+        accountSummaries.push(`@${account.username}: đạt hạn mức ngày`);
+        continue;
+      }
+
+      // 3. Pick pending targets (or specificTargetId if requested)
+      let db = await readDb();
+      let pendingTargets = specificTargetId
+        ? db.targets.filter((t) => t.id === specificTargetId)
+        : db.targets.filter(
+            (t) =>
+              t.status === "pending" &&
+              t.username.toLowerCase() !== account.username.toLowerCase()
           );
-          targetUserId = profile.id;
-          await updateTarget(target.id, {
-            twitterUserId: profile.id,
-            displayName: profile.name,
-            bio: profile.description,
-            followersCount: profile.public_metrics?.followers_count,
-          });
 
-          if (config.skipProtectedUsers && profile.protected) {
+      // 4. Auto-discover / refill queue via X API if pending queue is empty!
+      if (pendingTargets.length === 0 && !specificTargetId) {
+        try {
+          const seedSource =
+            db.targets.find((t) => t.status === "followed")?.username ||
+            "vercel";
+          const discovered = await fetchUserFollowersFromTwitter(
+            account,
+            seedSource,
+            10
+          );
+          if (discovered.length > 0) {
+            await addTargets(
+              discovered.map((f) => ({
+                username: f.username,
+                twitterUserId: f.id,
+                displayName: f.name,
+                bio: f.description,
+                followersCount: f.public_metrics?.followers_count,
+                source: "followers_import" as const,
+                sourceNote: `Auto-discovered from @${seedSource}`,
+              }))
+            );
+            db = await readDb();
+            pendingTargets = db.targets.filter(
+              (t) =>
+                t.status === "pending" &&
+                t.username.toLowerCase() !== account.username.toLowerCase()
+            );
+          }
+        } catch {
+          // Ignore auto-discovery error if none available
+        }
+      }
+
+      if (pendingTargets.length === 0) {
+        const msg =
+          "Hàng đợi trống: Không còn user nào ở trạng thái chờ Follow.";
+        const log = await appendLog({
+          runId,
+          trigger,
+          accountId: account.id,
+          accountUsername: account.username,
+          action: "cron_run",
+          status: "skipped",
+          message: msg,
+        });
+        runLogs.push(log);
+        accountSummaries.push(`@${account.username}: hàng đợi trống`);
+        continue;
+      }
+
+      const batchSize = specificTargetId
+        ? 1
+        : Math.min(
+            config.maxFollowsPerRun,
+            remainingToday,
+            pendingTargets.length
+          );
+      const batch = pendingTargets.slice(0, batchSize);
+
+      let accFollowed = 0;
+      let accFailed = 0;
+
+      for (let i = 0; i < batch.length; i++) {
+        const target = batch[i];
+        const startMs = Date.now();
+        totalProcessed++;
+
+        try {
+          let targetUserId = target.twitterUserId;
+
+          // Resolve username -> userId if missing
+          if (!targetUserId) {
+            const profile = await lookupTwitterUserByUsername(
+              account,
+              target.username
+            );
+            targetUserId = profile.id;
             await updateTarget(target.id, {
-              status: "skipped",
-              lastError: "Skipped protected account",
+              twitterUserId: profile.id,
+              displayName: profile.name,
+              bio: profile.description,
+              followersCount: profile.public_metrics?.followers_count,
             });
-            const skipLog = await appendLog({
+
+            if (config.skipProtectedUsers && profile.protected) {
+              await updateTarget(target.id, {
+                status: "skipped",
+                lastError: "Skipped protected account",
+              });
+              const skipLog = await appendLog({
+                runId,
+                trigger,
+                accountId: account.id,
+                accountUsername: account.username,
+                targetId: target.id,
+                targetUsername: target.username,
+                targetTwitterId: targetUserId,
+                action: "follow",
+                status: "skipped",
+                message: `Bỏ qua tài khoản khóa riêng tư @${target.username}`,
+                durationMs: Date.now() - startMs,
+              });
+              runLogs.push(skipLog);
+              continue;
+            }
+          }
+
+          if (config.dryRunMode) {
+            await sleep(randomBetween(150, 350));
+            const durationMs = Date.now() - startMs;
+            await updateTarget(target.id, {
+              status: "followed",
+              attempts: target.attempts + 1,
+              followedByAccountId: account.id,
+              followedAt: new Date().toISOString(),
+              lastError: undefined,
+            });
+            accFollowed++;
+            totalFollowed++;
+
+            const log = await appendLog({
               runId,
               trigger,
               accountId: account.id,
@@ -262,150 +327,146 @@ export async function runAutoFollowJob(
               targetUsername: target.username,
               targetTwitterId: targetUserId,
               action: "follow",
-              status: "skipped",
-              message: `Skipped protected user @${target.username}`,
-              durationMs: Date.now() - startMs,
+              status: "dry_run",
+              message: `[Dry-Run API] Đã gọi Follow @${target.username} (ID: ${
+                targetUserId || "auto"
+              })`,
+              httpStatus: 200,
+              durationMs,
             });
-            runLogs.push(skipLog);
-            continue;
+            runLogs.push(log);
+          } else {
+            const followRes = await executeTwitterFollowRequest({
+              account,
+              targetUserId,
+              targetUsername: target.username,
+            });
+            const durationMs = Date.now() - startMs;
+
+            await updateTarget(target.id, {
+              status: "followed",
+              twitterUserId: followRes.resolvedUserId || targetUserId,
+              attempts: target.attempts + 1,
+              followedByAccountId: account.id,
+              followedAt: new Date().toISOString(),
+              lastError: undefined,
+            });
+            accFollowed++;
+            totalFollowed++;
+
+            const log = await appendLog({
+              runId,
+              trigger,
+              accountId: account.id,
+              accountUsername: account.username,
+              targetId: target.id,
+              targetUsername: target.username,
+              targetTwitterId: followRes.resolvedUserId || targetUserId,
+              action: "follow",
+              status: "success",
+              message: followRes.pending_follow
+                ? `[${followRes.endpointUsed}] Đã gửi yêu cầu follow tới @${target.username} bằng @${account.username}`
+                : `[${followRes.endpointUsed}] Đã tự động gọi API Follow thành công @${target.username} (ID: ${
+                    followRes.resolvedUserId || targetUserId
+                  }) bằng @${account.username}`,
+              httpStatus: followRes.httpStatus,
+              durationMs,
+            });
+            runLogs.push(log);
+          }
+        } catch (err) {
+          accFailed++;
+          totalFailed++;
+          const durationMs = Date.now() - startMs;
+          const errMsg =
+            err instanceof Error ? err.message : "Unknown X API error";
+          const httpStatus =
+            err && typeof err === "object" && "status" in err
+              ? Number((err as { status?: number }).status)
+              : 500;
+
+          await updateTarget(target.id, {
+            status: "failed",
+            attempts: target.attempts + 1,
+            lastError: errMsg,
+          });
+
+          const log = await appendLog({
+            runId,
+            trigger,
+            accountId: account.id,
+            accountUsername: account.username,
+            targetId: target.id,
+            targetUsername: target.username,
+            targetTwitterId: target.twitterUserId,
+            action: "follow",
+            status: "error",
+            message: `Lỗi gọi API Follow @${target.username} (bằng @${account.username}): ${errMsg}`,
+            httpStatus,
+            durationMs,
+          });
+          runLogs.push(log);
+
+          if (httpStatus === 429) {
+            break;
           }
         }
 
-        if (config.dryRunMode) {
-          await sleep(randomBetween(150, 350));
-          const durationMs = Date.now() - startMs;
-          await updateTarget(target.id, {
-            status: "followed",
-            attempts: target.attempts + 1,
-            followedByAccountId: account.id,
-            followedAt: new Date().toISOString(),
-            lastError: undefined,
-          });
-          followedCount++;
-
-          const log = await appendLog({
-            runId,
-            trigger,
-            accountId: account.id,
-            accountUsername: account.username,
-            targetId: target.id,
-            targetUsername: target.username,
-            targetTwitterId: targetUserId,
-            action: "follow",
-            status: "dry_run",
-            message: `[Dry-Run] Followed @${target.username} (${targetUserId || "by handle"})`,
-            httpStatus: 200,
-            durationMs,
-          });
-          runLogs.push(log);
-        } else {
-          const followRes = await executeTwitterFollowRequest({
-            account,
-            targetUserId,
-            targetUsername: target.username,
-          });
-          const durationMs = Date.now() - startMs;
-
-          await updateTarget(target.id, {
-            status: "followed",
-            twitterUserId: followRes.resolvedUserId || targetUserId,
-            attempts: target.attempts + 1,
-            followedByAccountId: account.id,
-            followedAt: new Date().toISOString(),
-            lastError: undefined,
-          });
-          followedCount++;
-
-          const log = await appendLog({
-            runId,
-            trigger,
-            accountId: account.id,
-            accountUsername: account.username,
-            targetId: target.id,
-            targetUsername: target.username,
-            targetTwitterId: followRes.resolvedUserId || targetUserId,
-            action: "follow",
-            status: "success",
-            message: followRes.pending_follow
-              ? `Đã gửi yêu cầu follow tới @${target.username}`
-              : `Đã follow thành công @${target.username} trên X`,
-            httpStatus: followRes.httpStatus,
-            durationMs,
-          });
-          runLogs.push(log);
-        }
-      } catch (err) {
-        failedCount++;
-        const durationMs = Date.now() - startMs;
-        const errMsg =
-          err instanceof Error ? err.message : "Unknown X API error";
-        const httpStatus =
-          err && typeof err === "object" && "status" in err
-            ? Number((err as { status?: number }).status)
-            : 500;
-
-        await updateTarget(target.id, {
-          status: "failed",
-          attempts: target.attempts + 1,
-          lastError: errMsg,
-        });
-
-        const log = await appendLog({
-          runId,
-          trigger,
-          accountId: account.id,
-          accountUsername: account.username,
-          targetId: target.id,
-          targetUsername: target.username,
-          targetTwitterId: target.twitterUserId,
-          action: "follow",
-          status: "error",
-          message: `Lỗi khi follow @${target.username}: ${errMsg}`,
-          httpStatus,
-          durationMs,
-        });
-        runLogs.push(log);
-
-        if (httpStatus === 429) {
-          break;
+        if (i < batch.length - 1) {
+          const waitMs = config.dryRunMode
+            ? 200
+            : randomBetween(config.delayMinMs, config.delayMaxMs);
+          await sleep(waitMs);
         }
       }
 
-      if (i < batch.length - 1) {
-        const waitMs = config.dryRunMode
-          ? 250
-          : randomBetween(config.delayMinMs, config.delayMaxMs);
-        await sleep(waitMs);
+      if (accFollowed > 0) {
+        await upsertAccount({
+          ...account,
+          followingCount: (account.followingCount || 0) + accFollowed,
+          totalAutoFollowed: (account.totalAutoFollowed || 0) + accFollowed,
+          lastUsedAt: new Date().toISOString(),
+        });
       }
-    }
 
-    if (followedCount > 0) {
-      await upsertAccount({
-        ...account,
-        followingCount: (account.followingCount || 0) + followedCount,
-        totalAutoFollowed: (account.totalAutoFollowed || 0) + followedCount,
-        lastUsedAt: new Date().toISOString(),
-      });
+      accountSummaries.push(
+        `@${account.username} (${accFollowed}/${batch.length} thành công)`
+      );
+
+      // If single target was requested and processed, stop looping accounts
+      if (specificTargetId && totalFollowed > 0) {
+        break;
+      }
     }
 
     const overallStatus =
-      failedCount === 0
+      totalFailed === 0 && totalFollowed > 0
         ? "success"
-        : followedCount > 0
+        : totalFollowed > 0
         ? "partial"
+        : totalProcessed === 0
+        ? "skipped"
         : "error";
 
-    const summary = `Đã xử lý ${batch.length} mục tiêu bằng tài khoản @${account.username}: ${followedCount} thành công, ${failedCount} lỗi.`;
+    const summary =
+      totalProcessed > 0
+        ? `Tự động gọi API Follow hoàn tất: ${totalFollowed} thành công, ${totalFailed} lỗi [${accountSummaries.join(
+            ", "
+          )}].`
+        : accountSummaries.join(" | ") ||
+          "Không có mục tiêu nào cần xử lý trong chu kỳ này.";
 
     const summaryLog = await appendLog({
       runId,
       trigger,
-      accountId: account.id,
-      accountUsername: account.username,
+      accountId: candidateAccounts[0]?.id,
+      accountUsername: candidateAccounts[0]?.username,
       action: "cron_run",
       status:
         overallStatus === "error"
           ? "error"
+          : overallStatus === "skipped"
+          ? "skipped"
           : config.dryRunMode
           ? "dry_run"
           : "success",
@@ -415,7 +476,7 @@ export async function runAutoFollowJob(
 
     await updateCronConfig({
       lastRunAt: new Date().toISOString(),
-      lastRunStatus: overallStatus,
+      lastRunStatus: overallStatus === "skipped" ? "idle" : overallStatus,
       lastRunSummary: summary,
     });
 
@@ -424,10 +485,10 @@ export async function runAutoFollowJob(
       trigger,
       status: overallStatus,
       summary,
-      processedCount: batch.length,
-      followedCount,
-      failedCount,
-      todayTotalFollowed: await getTodayFollowCount(account.id),
+      processedCount: totalProcessed,
+      followedCount: totalFollowed,
+      failedCount: totalFailed,
+      todayTotalFollowed: await getTodayFollowCount(),
       logs: runLogs,
     };
   } finally {

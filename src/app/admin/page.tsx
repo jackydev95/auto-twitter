@@ -190,6 +190,11 @@ export default function AdminifyUsersAndTokensPage() {
     null
   );
 
+  // Automatic Follow API Caller state
+  const [autoCallCountdown, setAutoCallCountdown] = useState<number>(30);
+  const [runningAutoFollow, setRunningAutoFollow] = useState(false);
+  const [busyTargetId, setBusyTargetId] = useState<string | null>(null);
+
   const notify = useCallback(
     (type: "success" | "error" | "info", text: string) => {
       setBanner({ type, text });
@@ -366,9 +371,12 @@ export default function AdminifyUsersAndTokensPage() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Không thể thêm User");
+        const autoSummary = data.autoFollow?.summary
+          ? ` | Tự gọi API Follow: ${data.autoFollow.summary}`
+          : "";
         notify(
           "success",
-          `Đã xác thực thật và thêm User @${data.account.username} vào Vercel Redis!`
+          `Đã xác thực thật và thêm User @${data.account.username} vào Vercel Redis!${autoSummary}`
         );
       } else {
         const res = await fetch("/api/auth/twitter/token", {
@@ -445,6 +453,85 @@ export default function AdminifyUsersAndTokensPage() {
       );
     } finally {
       setBusyAccountId(null);
+    }
+  };
+
+  const handleTriggerAutoFollowAll = useCallback(
+    async (isAutoInterval = false) => {
+      if (runningAutoFollow) return;
+      setRunningAutoFollow(true);
+      try {
+        const res = await fetch("/api/cron/auto-follow", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trigger: isAutoInterval ? "auto_interval" : "manual",
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Lỗi gọi API Follow");
+        await fetchAdminData(false);
+        if (!isAutoInterval || data.followedCount > 0 || data.status === "error") {
+          notify(
+            data.status === "error" ? "error" : "success",
+            data.summary || "Đã tự động gọi API Follow hoàn tất!"
+          );
+        }
+      } catch (err) {
+        if (!isAutoInterval) {
+          notify(
+            "error",
+            err instanceof Error ? err.message : "Lỗi gọi API Follow"
+          );
+        }
+      } finally {
+        setRunningAutoFollow(false);
+        setAutoCallCountdown(30);
+      }
+    },
+    [runningAutoFollow, fetchAdminData, notify]
+  );
+
+  // Automatic client-side Follow API caller interval in Admin
+  useEffect(() => {
+    if (!cronConfig.enabled || accounts.length === 0) return;
+    const interval = setInterval(() => {
+      setAutoCallCountdown((prev) => {
+        if (prev <= 1) {
+          void handleTriggerAutoFollowAll(true);
+          return 30;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [cronConfig.enabled, accounts.length, handleTriggerAutoFollowAll]);
+
+  const handleFollowSingleTargetInAdmin = async (
+    targetId: string,
+    username: string
+  ) => {
+    setBusyTargetId(targetId);
+    try {
+      const res = await fetch("/api/cron/auto-follow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger: "manual", targetId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Lỗi gọi API Follow");
+      await fetchAdminData(false);
+      notify(
+        data.status === "error" ? "error" : "success",
+        data.summary || `Đã gọi API Follow @${username}!`
+      );
+    } catch (err) {
+      notify(
+        "error",
+        err instanceof Error ? err.message : "Lỗi gọi API Follow"
+      );
+    } finally {
+      setBusyTargetId(null);
     }
   };
 
@@ -659,6 +746,26 @@ export default function AdminifyUsersAndTokensPage() {
                 {storageInfo.connected
                   ? "Vercel Redis: Connected"
                   : "Vercel Redis: Chưa cấu hình URL"}
+              </span>
+            </button>
+
+            <button
+              onClick={() => handleTriggerAutoFollowAll(false)}
+              disabled={runningAutoFollow}
+              className="hidden xl:inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100 transition cursor-pointer"
+              title="Bấm để gọi API Follow ngay hoặc chờ tự động gọi sau mỗi 30s"
+            >
+              {runningAutoFollow ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
+              ) : (
+                <Play className="h-3.5 w-3.5 fill-current text-emerald-700" />
+              )}
+              <span>
+                {cronConfig.enabled
+                  ? accounts.length > 0
+                    ? `Tự gọi API Follow: ${autoCallCountdown}s`
+                    : "Auto-Follow: Chờ Token"
+                  : "Gọi API Follow Ngay"}
               </span>
             </button>
 
@@ -1491,6 +1598,7 @@ export default function AdminifyUsersAndTokensPage() {
                       <th className="py-2.5 px-3">Bio / Ghi chú</th>
                       <th className="py-2.5 px-3">Trạng thái</th>
                       <th className="py-2.5 px-3">Thời gian</th>
+                      <th className="py-2.5 px-3 text-right">Thao tác API</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1520,6 +1628,27 @@ export default function AdminifyUsersAndTokensPage() {
                         </td>
                         <td className="py-3 px-3 text-slate-400">
                           {new Date(t.createdAt).toLocaleString("vi-VN")}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          {t.status !== "followed" && (
+                            <button
+                              onClick={() =>
+                                handleFollowSingleTargetInAdmin(
+                                  t.id,
+                                  t.username
+                                )
+                              }
+                              disabled={busyTargetId === t.id}
+                              className="inline-flex items-center gap-1 rounded bg-[#ef1c1c] px-2.5 py-1 text-[10px] font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                            >
+                              {busyTargetId === t.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Play className="h-2.5 w-2.5 fill-current" />
+                              )}
+                              <span>Gọi API Follow</span>
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}

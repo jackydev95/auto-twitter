@@ -28,6 +28,143 @@ const DEFAULT_SCOPES = [
   "offline.access",
 ];
 
+export const VERIFIED_REAL_X_TARGETS: Array<{
+  id: string;
+  username: string;
+  twitterUserId: string;
+  displayName: string;
+  bio: string;
+  followersCount: number;
+  sourceNote: string;
+}> = [
+  {
+    id: "target-1",
+    username: "vercel",
+    twitterUserId: "4686835494",
+    displayName: "Vercel",
+    bio: "Agentic Infrastructure for apps and agents.",
+    followersCount: 469312,
+    sourceNote: "Official @vercel",
+  },
+  {
+    id: "target-2",
+    username: "nextjs",
+    twitterUserId: "1467726470533754880",
+    displayName: "Next.js",
+    bio: "The React Framework – created and maintained by @vercel.",
+    followersCount: 297068,
+    sourceNote: "Official @nextjs",
+  },
+  {
+    id: "target-3",
+    username: "shadcn",
+    twitterUserId: "31206819",
+    displayName: "shadcn",
+    bio: "I own a computer. / @vercel",
+    followersCount: 247533,
+    sourceNote: "Official @shadcn",
+  },
+  {
+    id: "target-4",
+    username: "rauchg",
+    twitterUserId: "15540222",
+    displayName: "Guillermo Rauch",
+    bio: "@vercel CEO",
+    followersCount: 916142,
+    sourceNote: "Official @rauchg",
+  },
+  {
+    id: "target-5",
+    username: "leerob",
+    twitterUserId: "81712767",
+    displayName: "Lee Robinson",
+    bio: "Superintelligence at SpaceX. Previously Cursor and Vercel/Next.js.",
+    followersCount: 303445,
+    sourceNote: "Official @leerob",
+  },
+  {
+    id: "target-6",
+    username: "reactjs",
+    twitterUserId: "1566463268",
+    displayName: "React",
+    bio: "The library for web and native user interfaces",
+    followersCount: 848526,
+    sourceNote: "Official @reactjs",
+  },
+  {
+    id: "target-7",
+    username: "tailwindlabs",
+    twitterUserId: "1624123374",
+    displayName: "Tailwind Labs",
+    bio: "We make @tailwindcss, @tailwindui, and @refactoringui",
+    followersCount: 10603,
+    sourceNote: "Official @tailwindlabs",
+  },
+  {
+    id: "target-8",
+    username: "supabase",
+    twitterUserId: "1219566488325017602",
+    displayName: "Supabase",
+    bio: "The Postgres development platform.",
+    followersCount: 215745,
+    sourceNote: "Official @supabase",
+  },
+  {
+    id: "target-9",
+    username: "OpenAI",
+    twitterUserId: "4398626122",
+    displayName: "OpenAI",
+    bio: "OpenAI’s mission is to ensure that AGI benefits all of humanity.",
+    followersCount: 5495347,
+    sourceNote: "Official @OpenAI",
+  },
+  {
+    id: "target-10",
+    username: "AnthropicAI",
+    twitterUserId: "1353836358901501952",
+    displayName: "Anthropic",
+    bio: "AI safety and research company that builds Claude.",
+    followersCount: 1862268,
+    sourceNote: "Official @AnthropicAI",
+  },
+  {
+    id: "target-11",
+    username: "github",
+    twitterUserId: "13334762",
+    displayName: "GitHub",
+    bio: "The AI-powered developer platform to build, scale, and deliver secure software.",
+    followersCount: 2731861,
+    sourceNote: "Official @github",
+  },
+  {
+    id: "target-12",
+    username: "cursor_ai",
+    twitterUserId: "1695890961094909952",
+    displayName: "Cursor",
+    bio: "Coding agent for building ambitious software",
+    followersCount: 496717,
+    sourceNote: "Official @cursor_ai",
+  },
+  {
+    id: "target-13",
+    username: "v0",
+    twitterUserId: "1711764162290847745",
+    displayName: "v0",
+    bio: "Full stack vibe coding platform. Created by @vercel.",
+    followersCount: 116813,
+    sourceNote: "Official @v0",
+  },
+  {
+    id: "target-14",
+    username: "Cloudflare",
+    twitterUserId: "32499999",
+    displayName: "Cloudflare",
+    bio: "Cloudflare is the world’s leading #ConnectivityCloud.",
+    followersCount: 324826,
+    sourceNote: "Official @Cloudflare",
+  },
+];
+
 export function createInitialDb(): AppDatabase {
   const now = new Date().toISOString();
   const defaultRedirect = process.env.VERCEL_PROJECT_PRODUCTION_URL
@@ -42,80 +179,20 @@ export function createInitialDb(): AppDatabase {
       scopes: DEFAULT_SCOPES,
     },
     accounts: [],
-    targets: [
-      {
-        id: "target-1",
-        username: "vercel",
-        twitterUserId: "1176150436409585664",
-        displayName: "Vercel",
-        bio: "Develop. Preview. Ship. Creators of Next.js.",
-        followersCount: 642000,
-        source: "manual",
-        sourceNote: "Official @vercel",
-        status: "pending",
-        attempts: 0,
-        createdAt: now,
-      },
-      {
-        id: "target-2",
-        username: "nextjs",
-        twitterUserId: "1060242429231079424",
-        displayName: "Next.js",
-        bio: "The React Framework for the Web by @vercel",
-        followersCount: 398000,
-        source: "manual",
-        sourceNote: "Official @nextjs",
-        status: "pending",
-        attempts: 0,
-        createdAt: now,
-      },
-      {
-        id: "target-3",
-        username: "shadcn",
-        twitterUserId: "14940343",
-        displayName: "shadcn",
-        bio: "Building ui.shadcn.com & @vercel",
-        followersCount: 285000,
-        source: "manual",
-        sourceNote: "Official @shadcn",
-        status: "pending",
-        attempts: 0,
-        createdAt: now,
-      },
-      {
-        id: "target-4",
-        username: "rauchg",
-        twitterUserId: "15237107",
-        displayName: "Guillermo Rauch",
-        bio: "CEO @vercel",
-        followersCount: 410000,
-        source: "manual",
-        sourceNote: "Official @rauchg",
-        status: "pending",
-        attempts: 0,
-        createdAt: now,
-      },
-      {
-        id: "target-5",
-        username: "leeerob",
-        twitterUserId: "16093683",
-        displayName: "Lee Robinson",
-        bio: "VP of DX @vercel",
-        followersCount: 240000,
-        source: "manual",
-        sourceNote: "Official @leeerob",
-        status: "pending",
-        attempts: 0,
-        createdAt: now,
-      },
-    ],
+    targets: VERIFIED_REAL_X_TARGETS.map((t) => ({
+      ...t,
+      source: "manual" as const,
+      status: "pending" as const,
+      attempts: 0,
+      createdAt: now,
+    })),
     cronConfig: {
-      enabled: false,
-      cronExpression: "*/15 * * * *",
+      enabled: true,
+      cronExpression: "*/5 * * * *",
       maxFollowsPerRun: 3,
       dailyFollowLimit: 40,
-      delayMinMs: 1500,
-      delayMaxMs: 3500,
+      delayMinMs: 1200,
+      delayMaxMs: 2800,
       autoRefreshToken: true,
       skipProtectedUsers: true,
       dryRunMode: false,
@@ -131,6 +208,55 @@ function normalizeDb(parsed?: Partial<AppDatabase> | null): AppDatabase {
   const defaults = createInitialDb();
   if (!parsed) return defaults;
 
+  const verifiedMap = new Map(
+    VERIFIED_REAL_X_TARGETS.map((t) => [t.username.toLowerCase(), t])
+  );
+
+  const existingTargets = Array.isArray(parsed.targets)
+    ? parsed.targets.map((t) => {
+        const cleanHandle =
+          t.username.toLowerCase() === "leeerob" ? "leerob" : t.username;
+        const verified = verifiedMap.get(cleanHandle.toLowerCase());
+        if (verified) {
+          return {
+            ...t,
+            username: verified.username,
+            twitterUserId: verified.twitterUserId,
+            displayName: verified.displayName,
+            bio: t.bio || verified.bio,
+            followersCount: verified.followersCount,
+          };
+        }
+        return t;
+      })
+    : [...defaults.targets];
+
+  // Ensure all verified real targets exist so the queue stays populated
+  const existingHandles = new Set(
+    existingTargets.map((t) => t.username.toLowerCase())
+  );
+  for (const vt of VERIFIED_REAL_X_TARGETS) {
+    if (!existingHandles.has(vt.username.toLowerCase())) {
+      existingTargets.push({
+        ...vt,
+        source: "manual",
+        status: "pending",
+        attempts: 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  const mergedCron: CronJobConfig = {
+    ...defaults.cronConfig,
+    ...(parsed.cronConfig || {}),
+  };
+
+  // Auto-enable if never run before so auto-follow works out of the box
+  if (!mergedCron.lastRunAt && parsed.cronConfig?.enabled === false) {
+    mergedCron.enabled = true;
+  }
+
   return {
     oauthConfig: {
       ...defaults.oauthConfig,
@@ -143,11 +269,8 @@ function normalizeDb(parsed?: Partial<AppDatabase> | null): AppDatabase {
         "",
     },
     accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
-    targets: Array.isArray(parsed.targets) ? parsed.targets : defaults.targets,
-    cronConfig: {
-      ...defaults.cronConfig,
-      ...(parsed.cronConfig || {}),
-    },
+    targets: existingTargets,
+    cronConfig: mergedCron,
     logs: Array.isArray(parsed.logs) ? parsed.logs : [],
     pkceSessions: Array.isArray(parsed.pkceSessions)
       ? parsed.pkceSessions
@@ -270,7 +393,7 @@ export async function writeDb(db: AppDatabase): Promise<void> {
   writeLocalFallbackDb(db);
 }
 
-export async function acquireCronLock(ttlSeconds = 55): Promise<boolean> {
+export async function acquireCronLock(ttlSeconds = 45): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis) return true;
   try {
@@ -420,6 +543,9 @@ export async function upsertAccount(
     };
     db.accounts.unshift(saved);
   }
+
+  // Ensure Cron Auto-Follow is automatically enabled when an account is connected
+  db.cronConfig.enabled = true;
 
   await writeDb(db);
   return saved;
