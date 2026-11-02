@@ -128,6 +128,10 @@ export default function XAutoFollowStudioPage() {
   const [followingTargetId, setFollowingTargetId] = useState<string | null>(
     null
   );
+  const [statusText, setStatusText] = useState(
+    "🚀 Connected @{username} with X Auto-Follow & Status Studio! #X #Nextjs #Automation"
+  );
+  const [postingStatus, setPostingStatus] = useState(false);
 
   // Target queue state
   const [bulkUsernames, setBulkUsernames] = useState("");
@@ -193,11 +197,14 @@ export default function XAutoFollowStudioPage() {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const authSuccess = params.get("auth_success");
+      const postedTweet = params.get("posted_tweet");
       const authError = params.get("auth_error");
       if (authSuccess) {
         showNotice(
           "success",
-          `Đã xác thực và lưu OAuth 2.0 Token thành công cho tài khoản @${authSuccess}!`
+          `Đã xác thực @${authSuccess}, tự động gọi API đăng Status lên X${
+            postedTweet ? ` (${postedTweet})` : ""
+          } và tự gọi API Follow thành công!`
         );
         window.history.replaceState({}, "", "/");
       } else if (authError) {
@@ -323,6 +330,7 @@ export default function XAutoFollowStudioPage() {
               action: "import_cookie",
               authToken: cookieAuthToken,
               ct0: cookieCt0,
+              statusText,
             }
           : {
               action: "import_token",
@@ -331,6 +339,7 @@ export default function XAutoFollowStudioPage() {
               username: manualUsername,
               twitterUserId: manualUserId,
               verifyOnline,
+              statusText,
             };
 
       const res = await fetch("/api/auth/twitter/token", {
@@ -347,12 +356,19 @@ export default function XAutoFollowStudioPage() {
       setManualUsername("");
       setManualUserId("");
       await fetchState(false);
+      const postSummary = data.autoPost?.ok
+        ? ` | Đã tự động Post Status lên X (${
+            data.autoPost.tweetUrl || "POST /2/tweets"
+          })`
+        : data.autoPost?.error
+        ? ` | Post Status: ${data.autoPost.error}`
+        : "";
       const autoSummary = data.autoFollow?.summary
         ? ` | Tự gọi API Follow: ${data.autoFollow.summary}`
         : "";
       showNotice(
         "success",
-        `Đã xác thực thật và lưu vào Vercel Redis cho tài khoản @${data.account.username} (ID: ${data.account.twitterUserId})${autoSummary}`
+        `Đã xác thực thật và lưu vào Vercel Redis cho @${data.account.username} (ID: ${data.account.twitterUserId})${postSummary}${autoSummary}`
       );
     } catch (err) {
       showNotice(
@@ -404,6 +420,40 @@ export default function XAutoFollowStudioPage() {
     });
     await fetchState(false);
     showNotice("info", "Đã xóa tài khoản khỏi hệ thống.");
+  };
+
+  const handlePostStatusNow = async (
+    accountId?: string,
+    customStatus?: string
+  ) => {
+    setPostingStatus(true);
+    try {
+      const res = await fetch("/api/twitter/post-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId,
+          text: customStatus ?? statusText,
+          trigger: "manual",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "Không thể đăng status lên X");
+      }
+      await fetchState(false);
+      showNotice(
+        "success",
+        data.result?.message || "Đã gọi API đăng Status lên X thành công!"
+      );
+    } catch (err) {
+      showNotice(
+        "error",
+        err instanceof Error ? err.message : "Lỗi gọi API Post Status"
+      );
+    } finally {
+      setPostingStatus(false);
+    }
   };
 
   // Handlers: Cron Config & Run
@@ -998,6 +1048,7 @@ export default function XAutoFollowStudioPage() {
                     <div className="flex flex-wrap gap-1.5">
                       {[
                         "tweet.read",
+                        "tweet.write",
                         "users.read",
                         "follows.read",
                         "follows.write",
@@ -1220,6 +1271,46 @@ export default function XAutoFollowStudioPage() {
               </div>
             </div>
 
+            {/* Auto-Post Status on X After Auth & Manual Composer */}
+            <div className="rounded-2xl border border-sky-500/30 bg-slate-900/70 p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-500/15 border border-sky-500/30 px-2.5 py-0.5 text-xs font-semibold text-sky-300">
+                    ⚡ Tự động Gọi API Post Status lên X sau khi Authen
+                  </span>
+                  <h3 className="mt-1.5 text-sm font-bold text-white">
+                    Nội dung Status (Tweet) tự động đăng lên X ngay khi xác thực Token
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handlePostStatusNow(activeAccount?.id)}
+                  disabled={postingStatus || !activeAccount}
+                  className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition cursor-pointer"
+                >
+                  {postingStatus ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  <span>Gọi API Post Status lên X Ngay</span>
+                </button>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={statusText}
+                  onChange={(e) => setStatusText(e.target.value)}
+                  placeholder="Nhập nội dung status muốn tự động đăng lên X..."
+                  className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3.5 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Ngay sau khi bạn bấm <strong>Authen Kết nối X</strong> hoặc lưu Cookie/Token, hệ thống sẽ tự động gọi <code>POST https://api.twitter.com/2/tweets</code> (hoặc <code>statuses/update.json</code>) để đăng status này lên X và tự động gọi API Follow.
+              </p>
+            </div>
+
             {/* Connected Accounts & Token Inspector */}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
@@ -1322,6 +1413,15 @@ export default function XAutoFollowStudioPage() {
                                 <Eye className="h-3.5 w-3.5" />
                               )}
                               <span>{isRevealed ? "Ẩn Token" : "Hiện Token"}</span>
+                            </button>
+
+                            <button
+                              onClick={() => handlePostStatusNow(acc.id)}
+                              disabled={postingStatus}
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 cursor-pointer"
+                            >
+                              <Sparkles className="h-3.5 w-3.5" />
+                              <span>Post Status X</span>
                             </button>
 
                             <button

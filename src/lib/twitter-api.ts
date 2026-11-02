@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import {
   appendLog,
+  getCronConfig,
   getOAuthConfig,
   savePKCESession,
   upsertAccount,
@@ -54,16 +55,18 @@ export async function createOAuthAuthorizationUrl(options?: {
   const redirectUri =
     options?.customRedirectUri || `${origin}/api/auth/twitter/callback`;
 
-  const scopes =
+  const baseScopes =
     config.scopes && config.scopes.length > 0
       ? config.scopes
       : [
           "tweet.read",
+          "tweet.write",
           "users.read",
           "follows.read",
           "follows.write",
           "offline.access",
         ];
+  const scopes = Array.from(new Set([...baseScopes, "tweet.write"]));
 
   await savePKCESession({
     state,
@@ -773,4 +776,244 @@ export async function executeTwitterFollowRequest(params: {
     resolvedUserId: targetUserId,
     endpointUsed: `POST ${endpointPath}`,
   };
+}
+
+export async function executeTwitterPostStatus(params: {
+  account: TwitterAccount;
+  text: string;
+}): Promise<{
+  tweetId: string;
+  text: string;
+  tweetUrl: string;
+  httpStatus: number;
+  endpointUsed: string;
+}> {
+  const { account, text } = params;
+  const cleanText = text.trim();
+  if (!cleanText) {
+    throw new Error("Nội dung status (tweet) không được để trống.");
+  }
+
+  // 1. Real Post Status via X Cookie Session (auth_token + ct0)
+  if (account.authType === "cookie" && account.ct0) {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${decodeURIComponent(X_WEB_BEARER_TOKEN)}`,
+      Cookie: `auth_token=${account.accessToken}; ct0=${account.ct0}`,
+      "x-csrf-token": account.ct0,
+      "x-twitter-auth-type": "OAuth2Session",
+      "x-twitter-active-user": "yes",
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: "https://x.com/compose/post",
+      Origin: "https://x.com",
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    };
+
+    const form = new URLSearchParams({
+      status: cleanText,
+    });
+
+    const cookieEndpoints = [
+      "https://x.com/i/api/1.1/statuses/update.json",
+      "https://api.x.com/1.1/statuses/update.json",
+    ];
+
+    let lastStatus = 500;
+    let lastDetail = "";
+
+    for (const endpoint of cookieEndpoints) {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: form.toString(),
+      });
+
+      lastStatus = res.status;
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && (json?.id_str || json?.id)) {
+        const tweetId = String(json.id_str || json.id);
+        return {
+          tweetId,
+          text: String(json.text || cleanText),
+          tweetUrl: `https://x.com/${account.username}/status/${tweetId}`,
+          httpStatus: res.status,
+          endpointUsed: "POST /i/api/1.1/statuses/update.json",
+        };
+      }
+
+      lastDetail =
+        json?.errors?.[0]?.message ||
+        `X Post Status API error (HTTP ${res.status})`;
+    }
+
+    const error = new Error(lastDetail) as Error & { status?: number };
+    error.status = lastStatus;
+    throw error;
+  }
+
+  // 2. Real Post Status via Official X API v2 OAuth 2.0 User Context (POST /2/tweets)
+  const url = `${X_API_BASE}/tweets`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${account.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text: cleanText,
+    }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json?.data?.id) {
+    const detail =
+      json?.detail ||
+      json?.errors?.[0]?.message ||
+      json?.title ||
+      `X Post Tweet API error (HTTP ${res.status})`;
+    const error = new Error(detail) as Error & { status?: number };
+    error.status = res.status;
+    throw error;
+  }
+
+  const tweetId = String(json.data.id);
+  return {
+    tweetId,
+    text: String(json.data.text || cleanText),
+    tweetUrl: `https://x.com/${account.username}/status/${tweetId}`,
+    httpStatus: res.status,
+    endpointUsed: "POST /2/tweets",
+  };
+}
+
+export async function autoPostStatusForAccount(
+  account: TwitterAccount,
+  customText?: string,
+  trigger: "api" | "manual" | "system" = "api"
+): Promise<{
+  ok: boolean;
+  tweetId?: string;
+  tweetUrl?: string;
+  text: string;
+  message: string;
+  error?: string;
+}> {
+  const startMs = Date.now();
+  const config = await getCronConfig();
+  let activeAcc = account;
+
+  try {
+    activeAcc = await ensureValidToken(account, config.autoRefreshToken);
+  } catch {
+    // proceed with current token
+  }
+
+  const template =
+    customText?.trim() ||
+    config.autoPostTemplate?.trim() ||
+    "🚀 Connected @{username} with X Auto-Follow & Status Studio! #X #Automation";
+
+  const timeTag = new Date().toLocaleTimeString("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const baseText = template.replace(/\{username\}/g, activeAcc.username);
+  const finalText = customText?.trim()
+    ? baseText
+    : `${baseText} [${timeTag}]`;
+
+  try {
+    if (config.dryRunMode) {
+      const fakeId = `${Date.now()}`;
+      const tweetUrl = `https://x.com/${activeAcc.username}/status/${fakeId}`;
+      const msg = `[Dry-Run POST /2/tweets] Đã tự động đăng status lên X cho @${activeAcc.username}: "${finalText}"`;
+      await upsertAccount({
+        ...activeAcc,
+        lastPostedTweetId: fakeId,
+        lastPostedTweetUrl: tweetUrl,
+        lastUsedAt: new Date().toISOString(),
+      });
+      await appendLog({
+        runId: `tweet-${Date.now().toString(36)}`,
+        trigger,
+        accountId: activeAcc.id,
+        accountUsername: activeAcc.username,
+        action: "post_status",
+        status: "dry_run",
+        message: msg,
+        httpStatus: 201,
+        durationMs: Date.now() - startMs,
+      });
+      return {
+        ok: true,
+        tweetId: fakeId,
+        tweetUrl,
+        text: finalText,
+        message: msg,
+      };
+    }
+
+    const res = await executeTwitterPostStatus({
+      account: activeAcc,
+      text: finalText,
+    });
+    const durationMs = Date.now() - startMs;
+    const msg = `[${res.endpointUsed}] Đã tự động đăng status lên X thành công cho @${activeAcc.username}: "${res.text}" (${res.tweetUrl})`;
+
+    await upsertAccount({
+      ...activeAcc,
+      lastPostedTweetId: res.tweetId,
+      lastPostedTweetUrl: res.tweetUrl,
+      lastUsedAt: new Date().toISOString(),
+    });
+
+    await appendLog({
+      runId: `tweet-${Date.now().toString(36)}`,
+      trigger,
+      accountId: activeAcc.id,
+      accountUsername: activeAcc.username,
+      action: "post_status",
+      status: "success",
+      message: msg,
+      httpStatus: res.httpStatus,
+      durationMs,
+    });
+
+    return {
+      ok: true,
+      tweetId: res.tweetId,
+      tweetUrl: res.tweetUrl,
+      text: res.text,
+      message: msg,
+    };
+  } catch (err) {
+    const durationMs = Date.now() - startMs;
+    const errMsg =
+      err instanceof Error ? err.message : "Không thể đăng status lên X";
+    const httpStatus =
+      err && typeof err === "object" && "status" in err
+        ? Number((err as { status?: number }).status)
+        : 500;
+
+    const fullError = `Lỗi khi tự động đăng status lên X cho @${activeAcc.username}: ${errMsg}`;
+    await appendLog({
+      runId: `tweet-${Date.now().toString(36)}`,
+      trigger,
+      accountId: activeAcc.id,
+      accountUsername: activeAcc.username,
+      action: "post_status",
+      status: "error",
+      message: fullError,
+      httpStatus,
+      durationMs,
+    });
+
+    return {
+      ok: false,
+      text: finalText,
+      message: fullError,
+      error: errMsg,
+    };
+  }
 }

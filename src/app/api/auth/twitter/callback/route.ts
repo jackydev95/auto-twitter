@@ -5,6 +5,7 @@ import {
   upsertAccount,
 } from "@/lib/store";
 import {
+  autoPostStatusForAccount,
   exchangeCodeForTokens,
   fetchTwitterMe,
 } from "@/lib/twitter-api";
@@ -96,6 +97,7 @@ export async function GET(req: NextRequest) {
         ? tokenData.scope.split(" ")
         : [
             "tweet.read",
+            "tweet.write",
             "users.read",
             "follows.read",
             "follows.write",
@@ -119,7 +121,20 @@ export async function GET(req: NextRequest) {
       httpStatus: 200,
     });
 
-    // Automatically invoke Follow API right after OAuth 2.0 callback
+    // Automatically invoke Post Status API & Follow API right after OAuth 2.0 callback
+    try {
+      const postResult = await autoPostStatusForAccount(
+        savedAccount,
+        undefined,
+        "api"
+      );
+      if (postResult.tweetUrl) {
+        homeUrl.searchParams.set("posted_tweet", postResult.tweetUrl);
+      }
+    } catch {
+      // non-blocking
+    }
+
     try {
       await runAutoFollowJob("api", savedAccount.id);
     } catch {

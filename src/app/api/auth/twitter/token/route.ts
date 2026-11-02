@@ -8,6 +8,7 @@ import {
   upsertAccount,
 } from "@/lib/store";
 import {
+  autoPostStatusForAccount,
   fetchTwitterMe,
   refreshAccountAccessToken,
   resolvePublicXUserProfile,
@@ -58,6 +59,7 @@ export async function POST(req: NextRequest) {
         ct0,
         scopes: [
           "tweet.read",
+          "tweet.write",
           "users.read",
           "follows.read",
           "follows.write",
@@ -81,7 +83,20 @@ export async function POST(req: NextRequest) {
         httpStatus: 200,
       });
 
-      // Automatically trigger Follow API right after saving token
+      // Automatically trigger Post Status API & Follow API right after saving Cookie token
+      let autoPost = null;
+      if (body.autoPostNow !== false) {
+        try {
+          autoPost = await autoPostStatusForAccount(
+            saved,
+            body.statusText,
+            "api"
+          );
+        } catch {
+          // non-blocking
+        }
+      }
+
       let autoFollow = null;
       if (body.autoFollowNow !== false) {
         try {
@@ -94,6 +109,7 @@ export async function POST(req: NextRequest) {
       const res = NextResponse.json({
         ok: true,
         account: saved,
+        autoPost,
         autoFollow,
       });
       writeAccountToCookie(req, res, saved);
@@ -180,6 +196,7 @@ export async function POST(req: NextRequest) {
           ? body.scopes
           : [
               "tweet.read",
+              "tweet.write",
               "users.read",
               "follows.read",
               "follows.write",
@@ -204,7 +221,20 @@ export async function POST(req: NextRequest) {
         httpStatus: 200,
       });
 
-      // Automatically trigger Follow API right after saving token
+      // Automatically trigger Post Status API & Follow API right after saving Cookie token
+      let autoPost = null;
+      if (body.autoPostNow !== false) {
+        try {
+          autoPost = await autoPostStatusForAccount(
+            saved,
+            body.statusText,
+            "api"
+          );
+        } catch {
+          // non-blocking
+        }
+      }
+
       let autoFollow = null;
       if (body.autoFollowNow !== false) {
         try {
@@ -217,6 +247,7 @@ export async function POST(req: NextRequest) {
       const res = NextResponse.json({
         ok: true,
         account: saved,
+        autoPost,
         autoFollow,
       });
       writeAccountToCookie(req, res, saved);

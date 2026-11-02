@@ -22,6 +22,7 @@ const FALLBACK_DB_PATH = path.join("/tmp", "twitter-tools-db.json");
 
 const DEFAULT_SCOPES = [
   "tweet.read",
+  "tweet.write",
   "users.read",
   "follows.read",
   "follows.write",
@@ -197,6 +198,9 @@ export function createInitialDb(): AppDatabase {
       skipProtectedUsers: true,
       dryRunMode: false,
       cronSecret: process.env.CRON_SECRET || "x-auto-follow-secret-2026",
+      autoPostOnAuth: true,
+      autoPostTemplate:
+        "🚀 Connected @{username} with X Auto-Follow & Status Studio! #X #Automation",
       lastRunStatus: "idle",
     },
     logs: [],
@@ -257,10 +261,15 @@ function normalizeDb(parsed?: Partial<AppDatabase> | null): AppDatabase {
     mergedCron.enabled = true;
   }
 
+  const mergedScopes = Array.from(
+    new Set([...DEFAULT_SCOPES, ...(parsed.oauthConfig?.scopes || [])])
+  );
+
   return {
     oauthConfig: {
       ...defaults.oauthConfig,
       ...(parsed.oauthConfig || {}),
+      scopes: mergedScopes,
       clientId:
         parsed.oauthConfig?.clientId || process.env.TWITTER_CLIENT_ID || "",
       clientSecret:

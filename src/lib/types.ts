@@ -30,6 +30,8 @@ export interface TwitterAccount {
   followersCount?: number;
   followingCount?: number;
   totalAutoFollowed?: number;
+  lastPostedTweetId?: string;
+  lastPostedTweetUrl?: string;
   lastUsedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -69,6 +71,8 @@ export interface CronJobConfig {
   skipProtectedUsers: boolean;
   dryRunMode: boolean;
   cronSecret: string;
+  autoPostOnAuth?: boolean;
+  autoPostTemplate?: string;
   lastRunAt?: string;
   lastRunStatus?: "success" | "partial" | "error" | "idle";
   lastRunSummary?: string;
@@ -83,7 +87,12 @@ export interface FollowLog {
   targetId?: string;
   targetUsername?: string;
   targetTwitterId?: string;
-  action: "follow" | "token_refresh" | "cron_run" | "resolve_user";
+  action:
+    | "follow"
+    | "post_status"
+    | "token_refresh"
+    | "cron_run"
+    | "resolve_user";
   status: "success" | "error" | "skipped" | "dry_run";
   message: string;
   httpStatus?: number;

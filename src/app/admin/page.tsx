@@ -230,11 +230,14 @@ export default function AdminifyUsersAndTokensPage() {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const authSuccess = params.get("auth_success");
+      const postedTweet = params.get("posted_tweet");
       const authError = params.get("auth_error");
       if (authSuccess) {
         notify(
           "success",
-          `Đã kết nối X OAuth 2.0 và lưu Token thành công cho @${authSuccess}!`
+          `Đã kết nối X OAuth 2.0 cho @${authSuccess}, tự động gọi API đăng Status lên X${
+            postedTweet ? ` (${postedTweet})` : ""
+          } và tự gọi API Follow!`
         );
         window.history.replaceState({}, "", "/admin");
       } else if (authError) {
@@ -371,12 +374,19 @@ export default function AdminifyUsersAndTokensPage() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Không thể thêm User");
+        const postSummary = data.autoPost?.ok
+          ? ` | Tự động Post Status lên X (${
+              data.autoPost.tweetUrl || "POST /2/tweets"
+            })`
+          : data.autoPost?.error
+          ? ` | Post Status: ${data.autoPost.error}`
+          : "";
         const autoSummary = data.autoFollow?.summary
           ? ` | Tự gọi API Follow: ${data.autoFollow.summary}`
           : "";
         notify(
           "success",
-          `Đã xác thực thật và thêm User @${data.account.username} vào Vercel Redis!${autoSummary}`
+          `Đã xác thực thật và thêm User @${data.account.username} vào Vercel Redis!${postSummary}${autoSummary}`
         );
       } else {
         const res = await fetch("/api/auth/twitter/token", {
@@ -425,6 +435,34 @@ export default function AdminifyUsersAndTokensPage() {
       notify(
         "error",
         err instanceof Error ? err.message : "Refresh token thất bại"
+      );
+    } finally {
+      setBusyAccountId(null);
+    }
+  };
+
+  const handlePostStatusForUser = async (acc: TwitterAccount) => {
+    setBusyAccountId(acc.id);
+    try {
+      const res = await fetch("/api/twitter/post-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: acc.id, trigger: "manual" }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "Post Status thất bại");
+      }
+      await fetchAdminData(false);
+      notify(
+        "success",
+        data.result?.message ||
+          `Đã gọi API đăng Status lên X cho @${acc.username}!`
+      );
+    } catch (err) {
+      notify(
+        "error",
+        err instanceof Error ? err.message : "Lỗi gọi API Post Status"
       );
     } finally {
       setBusyAccountId(null);
@@ -1516,6 +1554,16 @@ export default function AdminifyUsersAndTokensPage() {
                           {/* Action Buttons (like Delivered pill + quick actions) */}
                           <td className="py-3.5 px-3 text-right">
                             <div className="inline-flex items-center gap-1.5">
+                              <button
+                                onClick={() => handlePostStatusForUser(acc)}
+                                disabled={busyAccountId === acc.id}
+                                className="inline-flex items-center gap-1 rounded bg-slate-900 px-2.5 py-1 text-[10px] font-bold text-white shadow-2xs hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+                                title="Gọi API đăng Status (Tweet) lên X bằng Token của User này"
+                              >
+                                <Sparkles className="h-2.5 w-2.5" />
+                                <span>Post Status</span>
+                              </button>
+
                               <button
                                 onClick={() => handleRunFollowForUser(acc)}
                                 disabled={busyAccountId === acc.id}
