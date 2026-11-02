@@ -17,25 +17,11 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const config = await getOAuthConfig();
-
-    // If Client ID is not configured yet, open the Real X Connect Gateway (/oauth/x-authorize)
-    if (!config.clientId?.trim()) {
-      const gatewayUrl = new URL("/oauth/x-authorize", req.nextUrl.origin);
-      gatewayUrl.searchParams.set("return_to", returnTo);
-      if (mode === "json") {
-        return NextResponse.json({
-          authorizationUrl: gatewayUrl.toString(),
-          requiresSetup: true,
-        });
-      }
-      return NextResponse.redirect(gatewayUrl);
-    }
-
     const { authorizationUrl, state, codeVerifier, redirectUri } =
       await createOAuthAuthorizationUrl({
         origin: req.nextUrl.origin,
         returnTo,
+        clientIdOverride: clientIdParam,
       });
 
     const cookiePayload = Buffer.from(

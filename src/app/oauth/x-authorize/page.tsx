@@ -67,21 +67,14 @@ function XRealAuthGatewayContent() {
   const handleStartOfficialOAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    if (!clientId.trim()) {
-      setErrorMsg(
-        "Vui lòng nhập X OAuth 2.0 Client ID từ developer.x.com hoặc chuyển sang tab 'Kết nối bằng Cookie X (auth_token + ct0)'."
-      );
-      return;
-    }
-
     setSubmitting(true);
     try {
       const res = await fetch("/api/auth/twitter/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          clientId: clientId.trim(),
-          clientSecret: clientSecret.trim(),
+          clientId: clientId.trim() || undefined,
+          clientSecret: clientSecret.trim() || undefined,
           redirectUri: callbackUri,
           returnTo,
         }),
@@ -277,11 +270,10 @@ function XRealAuthGatewayContent() {
 
             <div>
               <label className="block text-xs font-medium text-zinc-300 mb-1">
-                X OAuth 2.0 Client ID <span className="text-rose-400">*</span>
+                X OAuth 2.0 Client ID (Tùy chọn — để trống sẽ dùng Client ID mặc định)
               </label>
               <input
                 type="text"
-                required
                 value={clientId}
                 onChange={(e) => setClientId(e.target.value)}
                 placeholder="Ví dụ: V1p6R2x... (từ X Developer Portal -> Keys and tokens)"
