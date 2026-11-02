@@ -29,6 +29,20 @@ Bộ công cụ **Next.js + pnpm + Vercel Redis (`@upstash/redis`)** giúp xác 
 
 ## 🚀 Cài đặt & Chạy Local
 
+Chạy nhanh chỉ với 1 lệnh qua `start.sh` (tự động kiểm tra `pnpm`, cài đặt packages, khởi chạy server kèm tiến trình ngầm gọi API Auto-Follow):
+
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+Các chế độ hỗ trợ trong `start.sh`:
+- `./start.sh` (hoặc `./start.sh dev`): Chạy môi trường Development + Auto-Follow Worker ngầm.
+- `./start.sh prod`: Build và chạy bản Production (`pnpm build && pnpm start`).
+- `./start.sh cron`: Gọi trực tiếp API `POST /api/cron/auto-follow` ngay lập tức.
+
+Hoặc chạy thủ công bằng `pnpm`:
+
 ```bash
 pnpm install
 pnpm dev
