@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 MODE="${1:-dev}"
-PORT="${PORT:-3000}"
+PORT="${PORT:-8000}"
 AUTO_CRON_INTERVAL="${AUTO_CRON_INTERVAL:-60}"
 
 echo "========================================================"
@@ -60,7 +60,7 @@ case "$MODE" in
     echo "[*] Chế độ Production: Building & Starting server trên cổng ${PORT}..."
     pnpm build
     start_background_auto_follow_loop
-    PORT="$PORT" pnpm start
+    PORT="$PORT" pnpm exec next start -p "$PORT"
     ;;
   build)
     echo "[*] Đang build production bundle..."
@@ -76,6 +76,7 @@ case "$MODE" in
   dev|*)
     echo "[*] Chế độ Development: Đang khởi chạy Next.js server trên cổng ${PORT}..."
     start_background_auto_follow_loop
-    PORT="$PORT" pnpm dev
+    PORT="$PORT" pnpm exec next dev -p "$PORT"
     ;;
 esac
+

@@ -143,7 +143,7 @@ export default function AdminifyUsersAndTokensPage() {
   const [oauthConfig, setOauthConfig] = useState<TwitterOAuthConfig>({
     clientId: "",
     clientSecret: "",
-    redirectUri: "http://localhost:3000/api/auth/twitter/callback",
+    redirectUri: "http://localhost:8000/api/auth/twitter/callback",
     scopes: [],
   });
   const [todayFollowCount, setTodayFollowCount] = useState(0);

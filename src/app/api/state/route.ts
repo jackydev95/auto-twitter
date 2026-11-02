@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
         clientSecret: body.clientSecret?.trim() ?? "",
         redirectUri:
           body.redirectUri?.trim() ||
-          "http://localhost:3000/api/auth/twitter/callback",
+          "http://localhost:8000/api/auth/twitter/callback",
         scopes: Array.isArray(body.scopes) ? body.scopes : undefined,
       });
       return NextResponse.json({ ok: true, oauthConfig: updated });

@@ -90,7 +90,7 @@ export default function XAutoFollowStudioPage() {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [redirectUri, setRedirectUri] = useState(
-    "http://localhost:3000/api/auth/twitter/callback"
+    "http://localhost:8000/api/auth/twitter/callback"
   );
 
   // Manual token / Cookie import state
@@ -163,7 +163,7 @@ export default function XAutoFollowStudioPage() {
         const dynamicCallback =
           typeof window !== "undefined"
             ? `${window.location.origin}/api/auth/twitter/callback`
-            : "http://localhost:3000/api/auth/twitter/callback";
+            : "http://localhost:8000/api/auth/twitter/callback";
         setRedirectUri(
           data.oauthConfig.redirectUri &&
             !data.oauthConfig.redirectUri.includes("localhost")
@@ -1955,7 +1955,7 @@ export default function XAutoFollowStudioPage() {
                   <button
                     onClick={() =>
                       copyToClipboard(
-                        `curl -X GET "http://localhost:3000/api/cron/auto-follow" -H "Authorization: Bearer ${cronForm.cronSecret}"`,
+                        `curl -X GET "http://localhost:8000/api/cron/auto-follow" -H "Authorization: Bearer ${cronForm.cronSecret}"`,
                         "Lệnh cURL"
                       )
                     }
@@ -1966,7 +1966,7 @@ export default function XAutoFollowStudioPage() {
                 </div>
                 <pre className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 p-3 text-[11px] font-mono text-slate-300">
 {`curl -X GET \\
-  "http://localhost:3000/api/cron/auto-follow" \\
+  "http://localhost:8000/api/cron/auto-follow" \\
   -H "Authorization: Bearer ${cronForm.cronSecret}"`}
                 </pre>
               </div>

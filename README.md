@@ -49,5 +49,5 @@ pnpm dev
 ```
 
 Mở trình duyệt tại:
-- User Portal: `http://localhost:3000`
-- Admin Dashboard: `http://localhost:3000/admin`
+- User Portal: `http://localhost:8000`
+- Admin Dashboard: `http://localhost:8000/admin`
